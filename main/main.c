@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include "esp_log.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -20,9 +21,21 @@ void app_main(void)
     ESP_LOGI(TAG, "Hardware: ESP32 + FE-URT-1 + STS3214 Servos");
     ESP_LOGI(TAG, "UART: TX=GPIO33, RX=GPIO32");
     
+    // Initialize NVS flash (required for BLE and storage)
+    ESP_LOGI(TAG, "Initializing NVS flash...");
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        ESP_LOGW(TAG, "NVS partition needs to be erased, erasing...");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "NVS flash initialized");
+    
     // Initialize UART communication with FE-URT-1 board
     ESP_LOGI(TAG, "Initializing UART for servo communication...");
-    esp_err_t ret = sts_servo_init();
+    ret = sts_servo_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize UART: %s", esp_err_to_name(ret));
         return;

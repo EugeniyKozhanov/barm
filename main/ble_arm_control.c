@@ -22,6 +22,12 @@ static uint16_t load_char_handle;
 static uint16_t play_char_handle;
 static uint16_t status_char_handle;
 
+// Service UUID for advertising (128-bit UUID in little-endian format)
+static uint8_t service_uuid[16] = {
+    0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x34, 0x12,
+    0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12
+};
+
 // BLE advertising data
 static esp_ble_adv_data_t adv_data = {
     .set_scan_rsp = false,
@@ -34,8 +40,8 @@ static esp_ble_adv_data_t adv_data = {
     .p_manufacturer_data = NULL,
     .service_data_len = 0,
     .p_service_data = NULL,
-    .service_uuid_len = 0,
-    .p_service_uuid = NULL,
+    .service_uuid_len = 16,
+    .p_service_uuid = service_uuid,
     .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
 };
 
@@ -202,14 +208,17 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
             esp_ble_gap_set_device_name(BLE_DEVICE_NAME);
             esp_ble_gap_config_adv_data(&adv_data);
             
-            // Create service
+            // Create service with 128-bit UUID
             esp_ble_gatts_create_service(gatts_if, &(esp_gatt_srvc_id_t){
                 .is_primary = true,
                 .id = {
                     .inst_id = 0,
                     .uuid = {
-                        .len = ESP_UUID_LEN_16,
-                        .uuid = {.uuid16 = ARM_SERVICE_UUID}
+                        .len = ESP_UUID_LEN_128,
+                        .uuid = {.uuid128 = {
+                            0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x34, 0x12,
+                            0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12
+                        }}
                     }
                 }
             }, 20);
@@ -220,8 +229,33 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
             arm_service_handle = param->create.service_handle;
             esp_ble_gatts_start_service(arm_service_handle);
             
-            // Add characteristics here (simplified for brevity)
-            // In production, add all characteristics properly
+            // Add RX characteristic (receives commands from phone)
+            esp_ble_gatts_add_char(arm_service_handle,
+                &(esp_bt_uuid_t){
+                    .len = ESP_UUID_LEN_128,
+                    .uuid = {.uuid128 = {
+                        0xbd, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x34, 0x12,
+                        0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12
+                    }}
+                },
+                ESP_GATT_PERM_WRITE,
+                ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_WRITE_NR,
+                NULL,
+                NULL);
+            
+            // Add TX characteristic (sends status to phone)
+            esp_ble_gatts_add_char(arm_service_handle,
+                &(esp_bt_uuid_t){
+                    .len = ESP_UUID_LEN_128,
+                    .uuid = {.uuid128 = {
+                        0xbe, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x34, 0x12,
+                        0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12
+                    }}
+                },
+                ESP_GATT_PERM_READ,
+                ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY,
+                NULL,
+                NULL);
             break;
             
         case ESP_GATTS_CONNECT_EVT:

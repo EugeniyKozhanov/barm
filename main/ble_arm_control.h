@@ -5,14 +5,24 @@
 #include "esp_gatts_api.h"
 #include "sts_servo.h"
 
-// BLE Service UUID: Custom ARM Control Service
-#define ARM_SERVICE_UUID          0x1800
-#define ARM_CHAR_JOINT_UUID       0x2A00  // Set joint position
-#define ARM_CHAR_ALLJOINTS_UUID   0x2A01  // Set all joints at once
-#define ARM_CHAR_SAVE_UUID        0x2A02  // Save current position
-#define ARM_CHAR_LOAD_UUID        0x2A03  // Load and execute position
-#define ARM_CHAR_PLAY_UUID        0x2A04  // Play sequence
-#define ARM_CHAR_STATUS_UUID      0x2A05  // Status/feedback
+// BLE Service UUID: Custom ARM Control Service (128-bit UUIDs matching Flutter app)
+// Service UUID: 12345678-1234-1234-1234-123456789abc
+static const uint8_t ARM_SERVICE_UUID[16] = {
+    0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x34, 0x12, 
+    0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12
+};
+
+// RX Characteristic UUID: 12345678-1234-1234-1234-123456789abd (receives commands from phone)
+static const uint8_t ARM_CHAR_RX_UUID[16] = {
+    0xbd, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x34, 0x12,
+    0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12
+};
+
+// TX Characteristic UUID: 12345678-1234-1234-1234-123456789abe (sends status to phone)
+static const uint8_t ARM_CHAR_TX_UUID[16] = {
+    0xbe, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x34, 0x12,
+    0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12
+};
 
 // BLE Configuration
 #define BLE_DEVICE_NAME           "ARM100_ESP32"
