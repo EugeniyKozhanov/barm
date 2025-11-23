@@ -138,6 +138,9 @@ esp_err_t sts_servo_read_position(uint8_t servo_id, uint16_t *position) {
  * Enable or disable torque for a servo
  */
 esp_err_t sts_servo_set_torque(uint8_t servo_id, uint8_t enable) {
+    // Flush RX buffer before sending
+    uart_flush_input(UART_PORT);
+    
     uint8_t packet[8];
     packet[0] = STS_FRAME_HEADER;
     packet[1] = STS_FRAME_HEADER;
@@ -148,7 +151,19 @@ esp_err_t sts_servo_set_torque(uint8_t servo_id, uint8_t enable) {
     packet[6] = enable ? 1 : 0;  // 0=disable, 1=enable
     packet[7] = sts_calculate_checksum(packet, 7);
 
-    return uart_write_bytes(UART_PORT, (const char *)packet, 8) == 8 ? ESP_OK : ESP_FAIL;
+    int written = uart_write_bytes(UART_PORT, (const char *)packet, 8);
+    if (written != 8) {
+        return ESP_FAIL;
+    }
+    
+    // Wait for transmission to complete
+    uart_wait_tx_done(UART_PORT, pdMS_TO_TICKS(50));
+    
+    // Optional: Read and discard response (some servos send ACK)
+    uint8_t response[8];
+    uart_read_bytes(UART_PORT, response, sizeof(response), pdMS_TO_TICKS(20));
+    
+    return ESP_OK;
 }
 
 /**

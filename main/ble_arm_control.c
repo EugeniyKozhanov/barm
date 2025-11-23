@@ -196,11 +196,21 @@ void ble_process_command(uint8_t *data, uint16_t len) {
         case CMD_SET_TORQUE: {
             if (len >= 2) {
                 uint8_t enable = data[1];
-                ESP_LOGI(TAG, "Set torque: %s", enable ? "ENABLE" : "DISABLE");
-                // Set torque for all servos
+                ESP_LOGI(TAG, "Set torque: %s for all servos", enable ? "ENABLE" : "DISABLE");
+                // Set torque for all servos with delay between commands
                 for (int i = 0; i < ARM_NUM_JOINTS; i++) {
-                    sts_servo_set_torque(ARM_SERVO_ID_BASE + i, enable);
+                    esp_err_t ret = sts_servo_set_torque(ARM_SERVO_ID_BASE + i, enable);
+                    if (ret == ESP_OK) {
+                        ESP_LOGD(TAG, "Torque %s for servo %d: OK", 
+                                enable ? "ENABLE" : "DISABLE", ARM_SERVO_ID_BASE + i);
+                    } else {
+                        ESP_LOGW(TAG, "Torque %s for servo %d: FAIL", 
+                                enable ? "ENABLE" : "DISABLE", ARM_SERVO_ID_BASE + i);
+                    }
+                    // Small delay to prevent UART bus congestion
+                    vTaskDelay(pdMS_TO_TICKS(10));
                 }
+                ESP_LOGI(TAG, "Torque %s complete", enable ? "ENABLE" : "DISABLE");
             }
             break;
         }
