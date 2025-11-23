@@ -1,0 +1,321 @@
+#include "ble_arm_control.h"
+#include "esp_log.h"
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "nvs_flash.h"
+#include "position_storage.h"
+#include "sequence_player.h"
+#include <string.h>
+
+static const char *TAG = "BLE_ARM";
+
+// BLE GATT server attributes
+static uint16_t arm_service_handle;
+static esp_gatt_if_t arm_gatts_if = ESP_GATT_IF_NONE;
+static uint16_t conn_id = 0xFFFF;
+
+// Characteristic handles
+static uint16_t joint_char_handle;
+static uint16_t all_joints_char_handle;
+static uint16_t save_char_handle;
+static uint16_t load_char_handle;
+static uint16_t play_char_handle;
+static uint16_t status_char_handle;
+
+// BLE advertising data
+static esp_ble_adv_data_t adv_data = {
+    .set_scan_rsp = false,
+    .include_name = true,
+    .include_txpower = true,
+    .min_interval = 0x0006,
+    .max_interval = 0x0010,
+    .appearance = 0x00,
+    .manufacturer_len = 0,
+    .p_manufacturer_data = NULL,
+    .service_data_len = 0,
+    .p_service_data = NULL,
+    .service_uuid_len = 0,
+    .p_service_uuid = NULL,
+    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+};
+
+// BLE advertising parameters
+static esp_ble_adv_params_t adv_params = {
+    .adv_int_min = 0x20,
+    .adv_int_max = 0x40,
+    .adv_type = ADV_TYPE_IND,
+    .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
+    .channel_map = ADV_CHNL_ALL,
+    .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+};
+
+/**
+ * Process received BLE command
+ */
+void ble_process_command(uint8_t *data, uint16_t len) {
+    if (len < 1) return;
+    
+    uint8_t cmd = data[0];
+    ESP_LOGI(TAG, "Received command: 0x%02X, length: %d", cmd, len);
+    
+    switch (cmd) {
+        case CMD_SET_JOINT: {
+            if (len >= sizeof(ble_joint_cmd_t)) {
+                ble_joint_cmd_t *joint_cmd = (ble_joint_cmd_t *)data;
+                if (joint_cmd->joint_id < ARM_NUM_JOINTS) {
+                    uint8_t servo_id = ARM_SERVO_ID_BASE + joint_cmd->joint_id;
+                    esp_err_t ret = sts_servo_set_position(servo_id, joint_cmd->position, 
+                                                           joint_cmd->time_ms, joint_cmd->speed);
+                    ESP_LOGI(TAG, "Set joint %d to position %d: %s", 
+                            joint_cmd->joint_id, joint_cmd->position, 
+                            ret == ESP_OK ? "OK" : "FAIL");
+                }
+            }
+            break;
+        }
+        
+        case CMD_SET_ALL_JOINTS: {
+            if (len >= sizeof(ble_all_joints_cmd_t)) {
+                ble_all_joints_cmd_t *all_cmd = (ble_all_joints_cmd_t *)data;
+                arm_position_t arm_pos = {0};
+                
+                for (int i = 0; i < ARM_NUM_JOINTS; i++) {
+                    arm_pos.joints[i].position = all_cmd->positions[i];
+                    arm_pos.joints[i].time_ms = all_cmd->time_ms;
+                    arm_pos.joints[i].speed = all_cmd->speed;
+                }
+                
+                esp_err_t ret = sts_servo_set_arm_position(&arm_pos);
+                ESP_LOGI(TAG, "Set all joints: %s", ret == ESP_OK ? "OK" : "FAIL");
+            }
+            break;
+        }
+        
+        case CMD_SAVE_POSITION: {
+            if (len >= sizeof(ble_storage_cmd_t)) {
+                ble_storage_cmd_t *storage_cmd = (ble_storage_cmd_t *)data;
+                
+                // Read current positions from servos
+                arm_position_t current_pos = {0};
+                current_pos.delay_after_ms = storage_cmd->delay_ms;
+                
+                for (int i = 0; i < ARM_NUM_JOINTS; i++) {
+                    uint16_t position;
+                    if (sts_servo_read_position(ARM_SERVO_ID_BASE + i, &position) == ESP_OK) {
+                        current_pos.joints[i].position = position;
+                        current_pos.joints[i].time_ms = 1000;  // Default 1 second
+                        current_pos.joints[i].speed = 1000;    // Default speed
+                    }
+                }
+                
+                esp_err_t ret = position_storage_save(storage_cmd->slot_id, &current_pos);
+                ESP_LOGI(TAG, "Save position to slot %d: %s", 
+                        storage_cmd->slot_id, ret == ESP_OK ? "OK" : "FAIL");
+            }
+            break;
+        }
+        
+        case CMD_LOAD_POSITION: {
+            if (len >= sizeof(ble_storage_cmd_t)) {
+                ble_storage_cmd_t *storage_cmd = (ble_storage_cmd_t *)data;
+                arm_position_t loaded_pos;
+                
+                esp_err_t ret = position_storage_load(storage_cmd->slot_id, &loaded_pos);
+                if (ret == ESP_OK) {
+                    ret = sts_servo_set_arm_position(&loaded_pos);
+                    ESP_LOGI(TAG, "Load position from slot %d: %s", 
+                            storage_cmd->slot_id, ret == ESP_OK ? "OK" : "FAIL");
+                }
+            }
+            break;
+        }
+        
+        case CMD_START_SEQUENCE: {
+            if (len >= sizeof(ble_sequence_cmd_t)) {
+                ble_sequence_cmd_t *seq_cmd = (ble_sequence_cmd_t *)data;
+                esp_err_t ret = sequence_player_start(seq_cmd->start_slot, 
+                                                     seq_cmd->end_slot, 
+                                                     seq_cmd->loop);
+                ESP_LOGI(TAG, "Start sequence %d-%d (loop=%d): %s", 
+                        seq_cmd->start_slot, seq_cmd->end_slot, seq_cmd->loop,
+                        ret == ESP_OK ? "OK" : "FAIL");
+            }
+            break;
+        }
+        
+        case CMD_STOP_SEQUENCE: {
+            sequence_player_stop();
+            ESP_LOGI(TAG, "Stop sequence");
+            break;
+        }
+        
+        case CMD_HOME_POSITION: {
+            // Move to center position
+            arm_position_t home_pos = {0};
+            for (int i = 0; i < ARM_NUM_JOINTS; i++) {
+                home_pos.joints[i].position = STS_POSITION_CENTER;
+                home_pos.joints[i].time_ms = 2000;
+                home_pos.joints[i].speed = 1000;
+            }
+            esp_err_t ret = sts_servo_set_arm_position(&home_pos);
+            ESP_LOGI(TAG, "Move to home position: %s", ret == ESP_OK ? "OK" : "FAIL");
+            break;
+        }
+        
+        default:
+            ESP_LOGW(TAG, "Unknown command: 0x%02X", cmd);
+            break;
+    }
+}
+
+/**
+ * Send status notification
+ */
+void ble_send_status(void) {
+    if (conn_id == 0xFFFF || arm_gatts_if == ESP_GATT_IF_NONE) {
+        return;
+    }
+    
+    ble_status_t status = {0};
+    status.is_moving = sequence_player_is_running();
+    status.current_slot = 0;  // Can be extended
+    
+    // Read current positions
+    for (int i = 0; i < ARM_NUM_JOINTS; i++) {
+        sts_servo_read_position(ARM_SERVO_ID_BASE + i, &status.current_positions[i]);
+    }
+    
+    esp_ble_gatts_send_indicate(arm_gatts_if, conn_id, status_char_handle,
+                                sizeof(status), (uint8_t *)&status, false);
+}
+
+/**
+ * GATT Server event handler
+ */
+void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, 
+                             esp_ble_gatts_cb_param_t *param) {
+    switch (event) {
+        case ESP_GATTS_REG_EVT:
+            ESP_LOGI(TAG, "GATT server registered, app_id: %04x", param->reg.app_id);
+            arm_gatts_if = gatts_if;
+            
+            esp_ble_gap_set_device_name(BLE_DEVICE_NAME);
+            esp_ble_gap_config_adv_data(&adv_data);
+            
+            // Create service
+            esp_ble_gatts_create_service(gatts_if, &(esp_gatt_srvc_id_t){
+                .is_primary = true,
+                .id = {
+                    .inst_id = 0,
+                    .uuid = {
+                        .len = ESP_UUID_LEN_16,
+                        .uuid = {.uuid16 = ARM_SERVICE_UUID}
+                    }
+                }
+            }, 20);
+            break;
+            
+        case ESP_GATTS_CREATE_EVT:
+            ESP_LOGI(TAG, "Service created");
+            arm_service_handle = param->create.service_handle;
+            esp_ble_gatts_start_service(arm_service_handle);
+            
+            // Add characteristics here (simplified for brevity)
+            // In production, add all characteristics properly
+            break;
+            
+        case ESP_GATTS_CONNECT_EVT:
+            ESP_LOGI(TAG, "Client connected");
+            conn_id = param->connect.conn_id;
+            break;
+            
+        case ESP_GATTS_DISCONNECT_EVT:
+            ESP_LOGI(TAG, "Client disconnected");
+            conn_id = 0xFFFF;
+            esp_ble_gap_start_advertising(&adv_params);
+            break;
+            
+        case ESP_GATTS_WRITE_EVT:
+            ESP_LOGI(TAG, "Write event, length: %d", param->write.len);
+            ble_process_command(param->write.value, param->write.len);
+            break;
+            
+        default:
+            break;
+    }
+}
+
+/**
+ * GAP event handler
+ */
+void ble_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
+    switch (event) {
+        case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
+            esp_ble_gap_start_advertising(&adv_params);
+            break;
+            
+        case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+            if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
+                ESP_LOGI(TAG, "Advertising started");
+            }
+            break;
+            
+        default:
+            break;
+    }
+}
+
+/**
+ * Initialize BLE for ARM control
+ */
+esp_err_t ble_arm_init(void) {
+    esp_err_t ret;
+    
+    // Initialize NVS
+    ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    
+    // Release classic BT memory
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
+    
+    // Initialize BT controller
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ret = esp_bt_controller_init(&bt_cfg);
+    if (ret) {
+        ESP_LOGE(TAG, "BT controller init failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+    if (ret) {
+        ESP_LOGE(TAG, "BT controller enable failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Initialize Bluedroid
+    ret = esp_bluedroid_init();
+    if (ret) {
+        ESP_LOGE(TAG, "Bluedroid init failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    ret = esp_bluedroid_enable();
+    if (ret) {
+        ESP_LOGE(TAG, "Bluedroid enable failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Register callbacks
+    esp_ble_gatts_register_callback(ble_gatts_event_handler);
+    esp_ble_gap_register_callback(ble_gap_event_handler);
+    
+    // Register GATT application
+    esp_ble_gatts_app_register(0);
+    
+    ESP_LOGI(TAG, "BLE initialized, device name: %s", BLE_DEVICE_NAME);
+    return ESP_OK;
+}
