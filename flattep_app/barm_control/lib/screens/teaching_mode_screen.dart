@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -68,15 +69,38 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
     bool torqueWasDisabled = !_torqueEnabled;
     if (torqueWasDisabled) {
       debugPrint('Temporarily enabling torque to read positions...');
+      
+      // Create a completer to wait for position update
+      final positionUpdateCompleter = Completer<void>();
+      final oldPosition = bleService.currentPosition;
+      
+      // Listen for position changes
+      void positionListener() {
+        if (bleService.currentPosition != oldPosition && !positionUpdateCompleter.isCompleted) {
+          debugPrint('Position updated after torque enable');
+          positionUpdateCompleter.complete();
+        }
+      }
+      bleService.addListener(positionListener);
+      
       final success = await bleService.setTorque(true);
       if (!success) {
+        bleService.removeListener(positionListener);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Failed to enable torque for reading')),
         );
         return;
       }
-      // Wait for torque to stabilize and status to update
-      await Future.delayed(const Duration(milliseconds: 300));
+      
+      // Wait for position update or timeout after 1 second
+      try {
+        await positionUpdateCompleter.future.timeout(const Duration(seconds: 1));
+        debugPrint('Received position update from ESP32');
+      } catch (e) {
+        debugPrint('Warning: Timeout waiting for position update, using cached position');
+      } finally {
+        bleService.removeListener(positionListener);
+      }
     }
     
     final position = bleService.currentPosition;
