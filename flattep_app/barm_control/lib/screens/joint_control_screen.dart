@@ -203,7 +203,7 @@ class _JointControlScreenState extends State<JointControlScreen> {
                     onChangeEnd: (value) {
                       if (bleService.isConnected) {
                         bleService.setSingleJoint(
-                          index + 1,
+                          index, // Send 0-5 (not index+1)
                           value.toInt(),
                           speed: _speed.toInt(),
                           time: _time.toInt(),
@@ -219,7 +219,7 @@ class _JointControlScreenState extends State<JointControlScreen> {
                     setState(() => _jointValues[index] = 2048.0);
                     if (bleService.isConnected) {
                       bleService.setSingleJoint(
-                        index + 1,
+                        index, // Send 0-5 (not index+1)
                         2048,
                         speed: _speed.toInt(),
                         time: _time.toInt(),

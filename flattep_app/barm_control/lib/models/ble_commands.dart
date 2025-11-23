@@ -17,7 +17,7 @@ enum BleCommand {
 class BleCommandBuilder {
   // CMD 0x01: Set single joint
   static Uint8List setSingleJoint(int jointId, int position, int speed, int time) {
-    assert(jointId >= 1 && jointId <= 6);
+    assert(jointId >= 0 && jointId <= 5, 'jointId must be 0-5 (maps to servo 1-6)');
     assert(position >= 0 && position <= 4095);
     
     final buffer = ByteData(8);

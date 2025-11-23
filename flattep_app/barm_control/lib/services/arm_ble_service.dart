@@ -17,6 +17,7 @@ class ArmBleService extends ChangeNotifier {
   StreamSubscription? _scanSubscription;
   StreamSubscription? _stateSubscription;
   StreamSubscription? _connectionSubscription;
+  StreamSubscription? _notificationSubscription;
   
   bool _isScanning = false;
   bool _isConnected = false;
@@ -83,7 +84,26 @@ class ArmBleService extends ChangeNotifier {
     try {
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
         for (var result in results) {
-          if (result.device.platformName == targetDeviceName) {
+          final deviceName = result.device.platformName;
+          final advName = result.advertisementData.advName;
+          final serviceUuids = result.advertisementData.serviceUuids;
+          final macAddress = result.device.remoteId.toString();
+          
+          debugPrint('Found device: MAC=$macAddress, platformName="$deviceName", advName="$advName", services=$serviceUuids');
+          
+          // Check device name (both platformName and advertisementData name)
+          bool nameMatch = deviceName == targetDeviceName || advName == targetDeviceName;
+          
+          // Check MAC address (from ESP32 log: b0:a7:32:27:cc:9a)
+          bool macMatch = macAddress.toLowerCase().replaceAll(':', '') == 'b0a73227cc9a';
+          
+          // Check if device advertises our service UUID
+          bool serviceMatch = serviceUuids.any((uuid) => 
+            uuid.toString().toLowerCase() == serviceUuid.toLowerCase()
+          );
+          
+          if (nameMatch || serviceMatch || macMatch) {
+            debugPrint('Found target device! Name match: $nameMatch, Service match: $serviceMatch, MAC match: $macMatch');
             stopScan();
             connect(result.device);
             break;
@@ -92,8 +112,10 @@ class ArmBleService extends ChangeNotifier {
       });
       
       await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 15),
-        androidUsesFineLocation: true,
+        timeout: const Duration(seconds: 20),  // Longer timeout for Linux
+        androidUsesFineLocation: false,  // Not needed on Linux
+        // Don't filter by service on Linux - BlueZ issues
+        // withServices: [Guid(serviceUuid)],
       );
       
       await Future.delayed(const Duration(seconds: 15));
@@ -124,6 +146,7 @@ class ArmBleService extends ChangeNotifier {
     try {
       // Listen to connection state
       _connectionSubscription = device.connectionState.listen((state) {
+        debugPrint('Connection state changed: $state');
         if (state == BluetoothConnectionState.disconnected) {
           _handleDisconnection();
         }
@@ -134,26 +157,39 @@ class ArmBleService extends ChangeNotifier {
         autoConnect: false,
       );
       
+      debugPrint('Connected, discovering services...');
       _updateStatus("Discovering services...");
       
       List<BluetoothService> services = await device.discoverServices();
+      debugPrint('Found ${services.length} services');
       
       for (var service in services) {
+        debugPrint('Service UUID: ${service.uuid}');
         if (service.uuid.toString().toLowerCase() == serviceUuid.toLowerCase()) {
+          debugPrint('Found ARM service!');
           for (var characteristic in service.characteristics) {
             final uuid = characteristic.uuid.toString().toLowerCase();
+            debugPrint('Characteristic UUID: $uuid');
             if (uuid == rxCharacteristicUuid.toLowerCase()) {
               _rxCharacteristic = characteristic;
+              debugPrint('Found RX characteristic');
             } else if (uuid == txCharacteristicUuid.toLowerCase()) {
               _txCharacteristic = characteristic;
+              debugPrint('Found TX characteristic');
               // Enable notifications
               await characteristic.setNotifyValue(true);
+              debugPrint('Notifications enabled');
+              // Listen to notifications (status updates from ESP32)
+              _notificationSubscription = characteristic.lastValueStream.listen((value) {
+                _handleStatusUpdate(value);
+              });
             }
           }
         }
       }
       
       if (_rxCharacteristic == null || _txCharacteristic == null) {
+        debugPrint('Service not found: RX=${_rxCharacteristic != null}, TX=${_txCharacteristic != null}');
         await device.disconnect();
         _updateStatus("Service not found on device");
         return;
@@ -161,8 +197,10 @@ class ArmBleService extends ChangeNotifier {
       
       _isConnected = true;
       _updateStatus("Connected to ARM100");
+      debugPrint('Successfully connected to ARM100');
       
     } catch (e) {
+      debugPrint('Connection error: $e');
       _updateStatus("Connection failed: $e");
       _device = null;
       _rxCharacteristic = null;
@@ -184,7 +222,30 @@ class ArmBleService extends ChangeNotifier {
     _txCharacteristic = null;
     _connectionSubscription?.cancel();
     _connectionSubscription = null;
+    _notificationSubscription?.cancel();
+    _notificationSubscription = null;
     _updateStatus("Disconnected");
+  }
+  
+  void _handleStatusUpdate(List<int> data) {
+    // Parse status data from ESP32
+    // Format: is_moving (1 byte), current_slot (1 byte), positions (6 x 2 bytes = 12 bytes)
+    // Total: 14 bytes
+    if (data.length >= 14) {
+      final isMoving = data[0] != 0;
+      final currentSlot = data[1];
+      
+      // Extract 6 joint positions (16-bit little-endian values)
+      final positions = List<int>.filled(6, 2048);
+      for (int i = 0; i < 6; i++) {
+        final offset = 2 + (i * 2);
+        positions[i] = data[offset] | (data[offset + 1] << 8);
+      }
+      
+      _currentPosition = ArmPosition(positions);
+      debugPrint('Status update - Moving: $isMoving, Slot: $currentSlot, Positions: $positions');
+      notifyListeners();
+    }
   }
   
   void _updateStatus(String status) {
@@ -211,7 +272,7 @@ class ArmBleService extends ChangeNotifier {
     final command = BleCommandBuilder.setSingleJoint(jointId, position, speed, time);
     final success = await _sendCommand(command);
     if (success) {
-      _currentPosition.jointPositions[jointId - 1] = position;
+      _currentPosition.jointPositions[jointId] = position;
       notifyListeners();
     }
     return success;
@@ -262,6 +323,7 @@ class ArmBleService extends ChangeNotifier {
     _scanSubscription?.cancel();
     _stateSubscription?.cancel();
     _connectionSubscription?.cancel();
+    _notificationSubscription?.cancel();
     disconnect();
     super.dispose();
   }

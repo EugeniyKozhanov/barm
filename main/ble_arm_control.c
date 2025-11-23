@@ -15,6 +15,8 @@ static esp_gatt_if_t arm_gatts_if = ESP_GATT_IF_NONE;
 static uint16_t conn_id = 0xFFFF;
 
 // Characteristic handles
+static uint16_t rx_char_handle = 0;
+static uint16_t tx_char_handle = 0;
 static uint16_t joint_char_handle;
 static uint16_t all_joints_char_handle;
 static uint16_t save_char_handle;
@@ -28,11 +30,11 @@ static uint8_t service_uuid[16] = {
     0x34, 0x12, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12
 };
 
-// BLE advertising data
+// BLE advertising data (main advertisement)
 static esp_ble_adv_data_t adv_data = {
     .set_scan_rsp = false,
-    .include_name = true,
-    .include_txpower = true,
+    .include_name = false,  // Move name to scan response
+    .include_txpower = false,  // Reduce size
     .min_interval = 0x0006,
     .max_interval = 0x0010,
     .appearance = 0x00,
@@ -45,10 +47,25 @@ static esp_ble_adv_data_t adv_data = {
     .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
 };
 
-// BLE advertising parameters
+// BLE scan response data (includes device name)
+static esp_ble_adv_data_t scan_rsp_data = {
+    .set_scan_rsp = true,
+    .include_name = true,  // Device name in scan response
+    .include_txpower = true,
+    .appearance = 0x00,
+    .manufacturer_len = 0,
+    .p_manufacturer_data = NULL,
+    .service_data_len = 0,
+    .p_service_data = NULL,
+    .service_uuid_len = 0,
+    .p_service_uuid = NULL,
+    .flag = 0,
+};
+
+// BLE advertising parameters (fast advertising for quick reconnection)
 static esp_ble_adv_params_t adv_params = {
-    .adv_int_min = 0x20,
-    .adv_int_max = 0x40,
+    .adv_int_min = 0x20,  // 20ms (32 * 0.625ms)
+    .adv_int_max = 0x30,  // 30ms (48 * 0.625ms) - faster than before
     .adv_type = ADV_TYPE_IND,
     .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
     .channel_map = ADV_CHNL_ALL,
@@ -72,9 +89,11 @@ void ble_process_command(uint8_t *data, uint16_t len) {
                     uint8_t servo_id = ARM_SERVO_ID_BASE + joint_cmd->joint_id;
                     esp_err_t ret = sts_servo_set_position(servo_id, joint_cmd->position, 
                                                            joint_cmd->time_ms, joint_cmd->speed);
-                    ESP_LOGI(TAG, "Set joint %d to position %d: %s", 
-                            joint_cmd->joint_id, joint_cmd->position, 
+                    ESP_LOGI(TAG, "Set joint %d (servo %d) to position %d: %s", 
+                            joint_cmd->joint_id, servo_id, joint_cmd->position, 
                             ret == ESP_OK ? "OK" : "FAIL");
+                } else {
+                    ESP_LOGW(TAG, "Invalid joint_id: %d (max is %d)", joint_cmd->joint_id, ARM_NUM_JOINTS - 1);
                 }
             }
             break;
@@ -178,7 +197,8 @@ void ble_process_command(uint8_t *data, uint16_t len) {
  * Send status notification
  */
 void ble_send_status(void) {
-    if (conn_id == 0xFFFF || arm_gatts_if == ESP_GATT_IF_NONE) {
+    if (conn_id == 0xFFFF || arm_gatts_if == ESP_GATT_IF_NONE || tx_char_handle == 0) {
+        ESP_LOGW(TAG, "Cannot send status: not connected or TX handle not set (handle=%d)", tx_char_handle);
         return;
     }
     
@@ -186,13 +206,27 @@ void ble_send_status(void) {
     status.is_moving = sequence_player_is_running();
     status.current_slot = 0;  // Can be extended
     
-    // Read current positions
+    // Read current positions from all servos
     for (int i = 0; i < ARM_NUM_JOINTS; i++) {
-        sts_servo_read_position(ARM_SERVO_ID_BASE + i, &status.current_positions[i]);
+        uint16_t position = 2048; // Default to center
+        if (sts_servo_read_position(ARM_SERVO_ID_BASE + i, &position) == ESP_OK) {
+            status.current_positions[i] = position;
+            ESP_LOGD(TAG, "Joint %d (servo %d): position %d", i, ARM_SERVO_ID_BASE + i, position);
+        } else {
+            ESP_LOGW(TAG, "Failed to read position for joint %d (servo %d)", i, ARM_SERVO_ID_BASE + i);
+            status.current_positions[i] = 2048; // Fallback to center
+        }
     }
     
-    esp_ble_gatts_send_indicate(arm_gatts_if, conn_id, status_char_handle,
+    // Send notification via TX characteristic
+    esp_err_t ret = esp_ble_gatts_send_indicate(arm_gatts_if, conn_id, tx_char_handle,
                                 sizeof(status), (uint8_t *)&status, false);
+    
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Status sent successfully");
+    } else {
+        ESP_LOGW(TAG, "Failed to send status: %s", esp_err_to_name(ret));
+    }
 }
 
 /**
@@ -206,7 +240,10 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
             arm_gatts_if = gatts_if;
             
             esp_ble_gap_set_device_name(BLE_DEVICE_NAME);
+            
+            // Configure both advertising data and scan response
             esp_ble_gap_config_adv_data(&adv_data);
+            esp_ble_gap_config_adv_data(&scan_rsp_data);
             
             // Create service with 128-bit UUID
             esp_ble_gatts_create_service(gatts_if, &(esp_gatt_srvc_id_t){
@@ -258,15 +295,40 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
                 NULL);
             break;
             
+        case ESP_GATTS_ADD_CHAR_EVT:
+            ESP_LOGI(TAG, "Characteristic added, status: %d, handle: %d", 
+                    param->add_char.status, param->add_char.attr_handle);
+            
+            // Store TX characteristic handle (the second one added)
+            if (rx_char_handle == 0) {
+                rx_char_handle = param->add_char.attr_handle;
+                ESP_LOGI(TAG, "RX characteristic handle: %d", rx_char_handle);
+            } else if (tx_char_handle == 0) {
+                tx_char_handle = param->add_char.attr_handle;
+                ESP_LOGI(TAG, "TX characteristic handle: %d", tx_char_handle);
+            }
+            break;
+            
         case ESP_GATTS_CONNECT_EVT:
             ESP_LOGI(TAG, "Client connected");
             conn_id = param->connect.conn_id;
+            
+            // Send current positions to the app
+            vTaskDelay(pdMS_TO_TICKS(100)); // Brief delay to ensure connection is stable
+            ble_send_status();
             break;
             
         case ESP_GATTS_DISCONNECT_EVT:
-            ESP_LOGI(TAG, "Client disconnected");
+            ESP_LOGI(TAG, "Client disconnected, reason: 0x%02x", param->disconnect.reason);
             conn_id = 0xFFFF;
-            esp_ble_gap_start_advertising(&adv_params);
+            
+            // Immediately restart advertising for quick reconnection
+            esp_err_t ret = esp_ble_gap_start_advertising(&adv_params);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to start advertising: %s", esp_err_to_name(ret));
+            } else {
+                ESP_LOGI(TAG, "Advertising restarted");
+            }
             break;
             
         case ESP_GATTS_WRITE_EVT:
@@ -358,5 +420,18 @@ esp_err_t ble_arm_init(void) {
     esp_ble_gatts_app_register(0);
     
     ESP_LOGI(TAG, "BLE initialized, device name: %s", BLE_DEVICE_NAME);
+    
+    // Read initial servo positions after a brief delay to let servos stabilize
+    vTaskDelay(pdMS_TO_TICKS(500));
+    ESP_LOGI(TAG, "Reading initial servo positions...");
+    for (int i = 0; i < ARM_NUM_JOINTS; i++) {
+        uint16_t position;
+        if (sts_servo_read_position(ARM_SERVO_ID_BASE + i, &position) == ESP_OK) {
+            ESP_LOGI(TAG, "  Joint %d (Servo %d): position %d", i, ARM_SERVO_ID_BASE + i, position);
+        } else {
+            ESP_LOGW(TAG, "  Joint %d (Servo %d): failed to read position", i, ARM_SERVO_ID_BASE + i);
+        }
+    }
+    
     return ESP_OK;
 }
