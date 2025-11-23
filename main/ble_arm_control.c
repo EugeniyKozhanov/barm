@@ -271,6 +271,13 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
             
         case ESP_GATTS_WRITE_EVT:
             ESP_LOGI(TAG, "Write event, length: %d", param->write.len);
+            
+            // Send response if needed
+            if (param->write.need_rsp) {
+                esp_ble_gatts_send_response(gatts_if, param->write.conn_id, 
+                    param->write.trans_id, ESP_GATT_OK, NULL);
+            }
+            
             ble_process_command(param->write.value, param->write.len);
             break;
             
