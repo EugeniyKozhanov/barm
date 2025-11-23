@@ -351,6 +351,11 @@ class ArmBleService extends ChangeNotifier {
     return success;
   }
   
+  Future<bool> setTorque(bool enable) async {
+    final command = BleCommandBuilder.setTorque(enable);
+    return await _sendCommand(command);
+  }
+  
   @override
   void dispose() {
     _scanSubscription?.cancel();

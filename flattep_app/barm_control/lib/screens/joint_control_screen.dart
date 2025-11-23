@@ -4,6 +4,7 @@ import '../services/arm_ble_service.dart';
 import '../models/arm_position.dart';
 import 'position_manager_screen.dart';
 import 'sequence_player_screen.dart';
+import 'teaching_mode_screen.dart';
 
 class JointControlScreen extends StatefulWidget {
   const JointControlScreen({super.key});
@@ -58,6 +59,14 @@ class _JointControlScreenState extends State<JointControlScreen> {
       appBar: AppBar(
         title: const Text('ARM100 Control'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.school),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const TeachingModeScreen()),
+            ),
+            tooltip: 'Teaching Mode',
+          ),
           IconButton(
             icon: const Icon(Icons.save),
             onPressed: () => Navigator.push(

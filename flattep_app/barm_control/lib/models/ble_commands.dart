@@ -8,7 +8,8 @@ enum BleCommand {
   playSequence(0x05),
   stopSequence(0x06),
   getStatus(0x07),
-  homePosition(0x08);
+  homePosition(0x08),
+  setTorque(0x09);
   
   final int value;
   const BleCommand(this.value);
@@ -105,5 +106,13 @@ class BleCommandBuilder {
     buffer.setUint16(1, speed, Endian.little);
     buffer.setUint16(3, time, Endian.little);
     return buffer.buffer.asUint8List();
+  }
+  
+  // CMD 0x09: Set torque enable/disable
+  static Uint8List setTorque(bool enable) {
+    final buffer = Uint8List(2);
+    buffer[0] = BleCommand.setTorque.value;
+    buffer[1] = enable ? 1 : 0;
+    return buffer;
   }
 }

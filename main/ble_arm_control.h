@@ -37,6 +37,7 @@ static const uint8_t ARM_CHAR_TX_UUID[16] = {
 #define CMD_STOP_SEQUENCE         0x06
 #define CMD_GET_STATUS            0x07
 #define CMD_HOME_POSITION         0x08
+#define CMD_SET_TORQUE            0x09
 
 // Response codes
 #define RESP_OK                   0x00

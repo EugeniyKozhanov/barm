@@ -135,6 +135,23 @@ esp_err_t sts_servo_read_position(uint8_t servo_id, uint16_t *position) {
 }
 
 /**
+ * Enable or disable torque for a servo
+ */
+esp_err_t sts_servo_set_torque(uint8_t servo_id, uint8_t enable) {
+    uint8_t packet[8];
+    packet[0] = STS_FRAME_HEADER;
+    packet[1] = STS_FRAME_HEADER;
+    packet[2] = servo_id;
+    packet[3] = 4;  // Length
+    packet[4] = STS_CMD_WRITE;
+    packet[5] = STS_ADDR_TORQUE_ENABLE;
+    packet[6] = enable ? 1 : 0;  // 0=disable, 1=enable
+    packet[7] = sts_calculate_checksum(packet, 7);
+
+    return uart_write_bytes(UART_PORT, (const char *)packet, 8) == 8 ? ESP_OK : ESP_FAIL;
+}
+
+/**
  * Set position for all ARM joints using sync write
  */
 esp_err_t sts_servo_sync_write_position(arm_position_t *arm_pos) {

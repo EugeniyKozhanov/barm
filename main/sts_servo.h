@@ -17,6 +17,7 @@
 // STS3214 Memory Table Addresses
 #define STS_ADDR_ID               0x05
 #define STS_ADDR_BAUD_RATE        0x06
+#define STS_ADDR_TORQUE_ENABLE    0x28
 #define STS_ADDR_GOAL_POSITION_L  0x2A
 #define STS_ADDR_GOAL_POSITION_H  0x2B
 #define STS_ADDR_GOAL_TIME_L      0x2C
@@ -66,6 +67,7 @@ esp_err_t sts_servo_set_position(uint8_t servo_id, uint16_t position, uint16_t t
 esp_err_t sts_servo_read_position(uint8_t servo_id, uint16_t *position);
 esp_err_t sts_servo_sync_write_position(arm_position_t *arm_pos);
 esp_err_t sts_servo_set_arm_position(arm_position_t *arm_pos);
+esp_err_t sts_servo_set_torque(uint8_t servo_id, uint8_t enable);
 uint8_t sts_calculate_checksum(uint8_t *data, uint8_t length);
 
 #endif // STS_SERVO_H
