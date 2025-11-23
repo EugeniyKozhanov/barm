@@ -107,6 +107,9 @@ esp_err_t sts_servo_set_position(uint8_t servo_id, uint16_t position,
  * Read current servo position
  */
 esp_err_t sts_servo_read_position(uint8_t servo_id, uint16_t *position) {
+    // Initialize to invalid value
+    *position = 0xFFFF;
+    
     uint8_t packet[8];
     packet[0] = STS_FRAME_HEADER;
     packet[1] = STS_FRAME_HEADER;

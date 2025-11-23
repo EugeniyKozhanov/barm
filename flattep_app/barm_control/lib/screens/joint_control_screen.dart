@@ -18,6 +18,41 @@ class _JointControlScreenState extends State<JointControlScreen> {
   double _time = 1000.0;
   
   @override
+  void initState() {
+    super.initState();
+    // Sync slider values with BLE service's current position
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final bleService = Provider.of<ArmBleService>(context, listen: false);
+      setState(() {
+        for (int i = 0; i < 6; i++) {
+          _jointValues[i] = bleService.currentPosition.jointPositions[i].toDouble();
+        }
+      });
+      
+      // Listen to position updates
+      bleService.addListener(_updatePositions);
+    });
+  }
+  
+  @override
+  void dispose() {
+    final bleService = Provider.of<ArmBleService>(context, listen: false);
+    bleService.removeListener(_updatePositions);
+    super.dispose();
+  }
+  
+  void _updatePositions() {
+    final bleService = Provider.of<ArmBleService>(context, listen: false);
+    if (mounted) {
+      setState(() {
+        for (int i = 0; i < 6; i++) {
+          _jointValues[i] = bleService.currentPosition.jointPositions[i].toDouble();
+        }
+      });
+    }
+  }
+  
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(

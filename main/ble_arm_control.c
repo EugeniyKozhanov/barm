@@ -174,6 +174,12 @@ void ble_process_command(uint8_t *data, uint16_t len) {
             break;
         }
         
+        case CMD_GET_STATUS: {
+            ESP_LOGI(TAG, "Get status request, sending status...");
+            ble_send_status();
+            break;
+        }
+        
         case CMD_HOME_POSITION: {
             // Move to center position
             arm_position_t home_pos = {0};
@@ -208,12 +214,14 @@ void ble_send_status(void) {
     
     // Read current positions from all servos
     for (int i = 0; i < ARM_NUM_JOINTS; i++) {
-        uint16_t position = 2048; // Default to center
-        if (sts_servo_read_position(ARM_SERVO_ID_BASE + i, &position) == ESP_OK) {
+        uint16_t position = 0xFFFF; // Will be set by read function
+        esp_err_t ret = sts_servo_read_position(ARM_SERVO_ID_BASE + i, &position);
+        
+        if (ret == ESP_OK && position != 0xFFFF && position <= 4095) {
             status.current_positions[i] = position;
             ESP_LOGD(TAG, "Joint %d (servo %d): position %d", i, ARM_SERVO_ID_BASE + i, position);
         } else {
-            ESP_LOGW(TAG, "Failed to read position for joint %d (servo %d)", i, ARM_SERVO_ID_BASE + i);
+            ESP_LOGW(TAG, "Failed to read position for joint %d (servo %d), using default 2048", i, ARM_SERVO_ID_BASE + i);
             status.current_positions[i] = 2048; // Fallback to center
         }
     }
@@ -310,11 +318,14 @@ void ble_gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
             break;
             
         case ESP_GATTS_CONNECT_EVT:
-            ESP_LOGI(TAG, "Client connected");
+            ESP_LOGI(TAG, "Client connected, conn_id: %d", param->connect.conn_id);
             conn_id = param->connect.conn_id;
+            break;
             
-            // Send current positions to the app
-            vTaskDelay(pdMS_TO_TICKS(100)); // Brief delay to ensure connection is stable
+        case ESP_GATTS_MTU_EVT:
+            ESP_LOGI(TAG, "MTU exchanged: %d, sending initial status...", param->mtu.mtu);
+            // Send status after MTU exchange (connection is stable)
+            vTaskDelay(pdMS_TO_TICKS(100));
             ble_send_status();
             break;
             

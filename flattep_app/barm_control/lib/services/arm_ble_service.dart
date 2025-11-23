@@ -180,7 +180,8 @@ class ArmBleService extends ChangeNotifier {
               await characteristic.setNotifyValue(true);
               debugPrint('Notifications enabled');
               // Listen to notifications (status updates from ESP32)
-              _notificationSubscription = characteristic.lastValueStream.listen((value) {
+              _notificationSubscription = characteristic.onValueReceived.listen((value) {
+                debugPrint('Received notification: ${value.length} bytes');
                 _handleStatusUpdate(value);
               });
             }
@@ -198,6 +199,13 @@ class ArmBleService extends ChangeNotifier {
       _isConnected = true;
       _updateStatus("Connected to ARM100");
       debugPrint('Successfully connected to ARM100');
+      
+      // Wait a bit for notification subscription to be fully active
+      await Future.delayed(const Duration(milliseconds: 200));
+      
+      // Request initial status to sync positions
+      debugPrint('Requesting initial status...');
+      await _sendCommand(BleCommandBuilder.getStatus());
       
     } catch (e) {
       debugPrint('Connection error: $e');
@@ -231,6 +239,7 @@ class ArmBleService extends ChangeNotifier {
     // Parse status data from ESP32
     // Format: is_moving (1 byte), current_slot (1 byte), positions (6 x 2 bytes = 12 bytes)
     // Total: 14 bytes
+    debugPrint('_handleStatusUpdate called with ${data.length} bytes: $data');
     if (data.length >= 14) {
       final isMoving = data[0] != 0;
       final currentSlot = data[1];
@@ -239,12 +248,32 @@ class ArmBleService extends ChangeNotifier {
       final positions = List<int>.filled(6, 2048);
       for (int i = 0; i < 6; i++) {
         final offset = 2 + (i * 2);
-        positions[i] = data[offset] | (data[offset + 1] << 8);
+        final low = data[offset];
+        final high = data[offset + 1];
+        positions[i] = low | (high << 8);
+        debugPrint('Joint $i: low=$low, high=$high, position=${positions[i]}');
       }
       
-      _currentPosition = ArmPosition(positions);
-      debugPrint('Status update - Moving: $isMoving, Slot: $currentSlot, Positions: $positions');
-      notifyListeners();
+      debugPrint('Parsed positions: $positions');
+      
+      // Validate positions before creating ArmPosition
+      bool valid = true;
+      for (int i = 0; i < positions.length; i++) {
+        if (positions[i] < 0 || positions[i] > 4095) {
+          debugPrint('ERROR: Invalid position at joint $i: ${positions[i]} (must be 0-4095)');
+          valid = false;
+        }
+      }
+      
+      if (valid) {
+        _currentPosition = ArmPosition(positions);
+        debugPrint('Status update - Moving: $isMoving, Slot: $currentSlot, Positions: $positions');
+        notifyListeners();
+      } else {
+        debugPrint('WARNING: Skipping invalid position update');
+      }
+    } else {
+      debugPrint('WARNING: Status data too short (${data.length} bytes, expected 14)');
     }
   }
   
@@ -255,14 +284,18 @@ class ArmBleService extends ChangeNotifier {
   
   Future<bool> _sendCommand(Uint8List command) async {
     if (!_isConnected || _rxCharacteristic == null) {
+      debugPrint('ERROR: Cannot send command - not connected or RX characteristic null');
       _updateStatus("Not connected");
       return false;
     }
     
     try {
+      debugPrint('Sending command: ${command.toList()} (${command.length} bytes)');
       await _rxCharacteristic!.write(command, withoutResponse: false);
+      debugPrint('Command sent successfully');
       return true;
     } catch (e) {
+      debugPrint('ERROR sending command: $e');
       _updateStatus("Send error: $e");
       return false;
     }
