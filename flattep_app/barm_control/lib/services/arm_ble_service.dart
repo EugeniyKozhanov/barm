@@ -291,7 +291,7 @@ class ArmBleService extends ChangeNotifier {
     
     try {
       debugPrint('Sending command: ${command.toList()} (${command.length} bytes)');
-      await _rxCharacteristic!.write(command, withoutResponse: false);
+      await _rxCharacteristic!.write(command, withoutResponse: true);
       debugPrint('Command sent successfully');
       return true;
     } catch (e) {

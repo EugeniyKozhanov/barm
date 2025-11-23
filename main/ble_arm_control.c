@@ -24,6 +24,9 @@ static uint16_t load_char_handle;
 static uint16_t play_char_handle;
 static uint16_t status_char_handle;
 
+// Cache last commanded positions (avoid reading from servos during movement)
+static uint16_t last_positions[ARM_NUM_JOINTS] = {2048, 2048, 2048, 2048, 2048, 2048};
+
 // Service UUID for advertising (128-bit UUID in little-endian format)
 static uint8_t service_uuid[16] = {
     0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x34, 0x12,
@@ -89,6 +92,10 @@ void ble_process_command(uint8_t *data, uint16_t len) {
                     uint8_t servo_id = ARM_SERVO_ID_BASE + joint_cmd->joint_id;
                     esp_err_t ret = sts_servo_set_position(servo_id, joint_cmd->position, 
                                                            joint_cmd->time_ms, joint_cmd->speed);
+                    if (ret == ESP_OK) {
+                        // Cache the commanded position
+                        last_positions[joint_cmd->joint_id] = joint_cmd->position;
+                    }
                     ESP_LOGI(TAG, "Set joint %d (servo %d) to position %d: %s", 
                             joint_cmd->joint_id, servo_id, joint_cmd->position, 
                             ret == ESP_OK ? "OK" : "FAIL");
@@ -104,10 +111,17 @@ void ble_process_command(uint8_t *data, uint16_t len) {
                 ble_all_joints_cmd_t *all_cmd = (ble_all_joints_cmd_t *)data;
                 arm_position_t arm_pos = {0};
                 
+                ESP_LOGI(TAG, "CMD_SET_ALL_JOINTS: speed=%d, time=%d", all_cmd->speed, all_cmd->time_ms);
+                ESP_LOGI(TAG, "  Positions: [%d, %d, %d, %d, %d, %d]",
+                        all_cmd->positions[0], all_cmd->positions[1], all_cmd->positions[2],
+                        all_cmd->positions[3], all_cmd->positions[4], all_cmd->positions[5]);
+                
                 for (int i = 0; i < ARM_NUM_JOINTS; i++) {
                     arm_pos.joints[i].position = all_cmd->positions[i];
                     arm_pos.joints[i].time_ms = all_cmd->time_ms;
                     arm_pos.joints[i].speed = all_cmd->speed;
+                    // Cache commanded positions
+                    last_positions[i] = all_cmd->positions[i];
                 }
                 
                 esp_err_t ret = sts_servo_set_arm_position(&arm_pos);
@@ -211,6 +225,20 @@ void ble_process_command(uint8_t *data, uint16_t len) {
                     vTaskDelay(pdMS_TO_TICKS(10));
                 }
                 ESP_LOGI(TAG, "Torque %s complete", enable ? "ENABLE" : "DISABLE");
+                
+                // If torque was enabled, read fresh positions and send status
+                if (enable) {
+                    vTaskDelay(pdMS_TO_TICKS(100)); // Wait for servos to stabilize
+                    ESP_LOGI(TAG, "Reading positions after torque enable...");
+                    for (int i = 0; i < ARM_NUM_JOINTS; i++) {
+                        uint16_t position;
+                        if (sts_servo_read_position(ARM_SERVO_ID_BASE + i, &position) == ESP_OK) {
+                            last_positions[i] = position;
+                            ESP_LOGD(TAG, "  Joint %d: %d", i, position);
+                        }
+                    }
+                    ble_send_status(); // Send updated positions to Flutter
+                }
             }
             break;
         }
@@ -454,15 +482,17 @@ esp_err_t ble_arm_init(void) {
     
     ESP_LOGI(TAG, "BLE initialized, device name: %s", BLE_DEVICE_NAME);
     
-    // Read initial servo positions after a brief delay to let servos stabilize
+    // Read initial servo positions and initialize cache
     vTaskDelay(pdMS_TO_TICKS(500));
     ESP_LOGI(TAG, "Reading initial servo positions...");
     for (int i = 0; i < ARM_NUM_JOINTS; i++) {
         uint16_t position;
         if (sts_servo_read_position(ARM_SERVO_ID_BASE + i, &position) == ESP_OK) {
+            last_positions[i] = position;  // Initialize cache with actual position
             ESP_LOGI(TAG, "  Joint %d (Servo %d): position %d", i, ARM_SERVO_ID_BASE + i, position);
         } else {
-            ESP_LOGW(TAG, "  Joint %d (Servo %d): failed to read position", i, ARM_SERVO_ID_BASE + i);
+            ESP_LOGW(TAG, "  Joint %d (Servo %d): failed to read, using default 2048", i, ARM_SERVO_ID_BASE + i);
+            last_positions[i] = 2048;  // Fallback to center
         }
     }
     

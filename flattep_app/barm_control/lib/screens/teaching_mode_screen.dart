@@ -63,7 +63,31 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
   
   Future<void> _saveCurrentPosition() async {
     final bleService = Provider.of<ArmBleService>(context, listen: false);
+    
+    // If torque is disabled, temporarily enable it to read positions
+    bool torqueWasDisabled = !_torqueEnabled;
+    if (torqueWasDisabled) {
+      debugPrint('Temporarily enabling torque to read positions...');
+      final success = await bleService.setTorque(true);
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to enable torque for reading')),
+        );
+        return;
+      }
+      // Wait for torque to stabilize and status to update
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+    
     final position = bleService.currentPosition;
+    debugPrint('Current position to save: ${position.jointPositions}');
+    
+    // Restore torque state if we changed it
+    if (torqueWasDisabled) {
+      debugPrint('Restoring torque disabled state...');
+      await bleService.setTorque(false);
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
     
     // Show dialog to name the position
     final TextEditingController nameController = TextEditingController(
@@ -74,13 +98,26 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Save Position'),
-        content: TextField(
-          controller: nameController,
-          decoration: const InputDecoration(
-            labelText: 'Position Name',
-            hintText: 'Enter a name for this position',
-          ),
-          autofocus: true,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(
+                labelText: 'Position Name',
+                hintText: 'Enter a name for this position',
+              ),
+              autofocus: true,
+            ),
+            const SizedBox(height: 16),
+            const Text('Current positions:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text(
+              position.jointPositions.map((p) => p.toString()).join(', '),
+              style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -185,27 +222,73 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
     
     final bleService = Provider.of<ArmBleService>(context, listen: false);
     
+    // Enable torque before playing
+    if (!_torqueEnabled) {
+      debugPrint('Enabling torque for playback...');
+      final success = await bleService.setTorque(true);
+      if (success) {
+        setState(() {
+          _torqueEnabled = true;
+        });
+        // Wait a bit for torque to stabilize
+        await Future.delayed(const Duration(milliseconds: 200));
+      } else {
+        setState(() {
+          _isPlaying = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to enable torque')),
+        );
+        return;
+      }
+    }
+    
+    int playCount = 0;
     do {
+      playCount++;
+      debugPrint('Playing sequence (iteration $playCount)...');
+      
       for (int i = 0; i < _positions.length; i++) {
-        if (!_isPlaying) break;
+        if (!_isPlaying) {
+          debugPrint('Playback stopped by user');
+          break;
+        }
         
         final pos = _positions[i];
+        debugPrint('Moving to position ${i + 1}/${_positions.length}: ${pos.name}');
         setState(() {}); // Trigger UI update to show current position
         
+        // Calculate movement time based on playback speed
+        // Slower speed = more time, faster speed = less time
+        final moveTime = (1000 / _playbackSpeed).toInt().clamp(100, 5000);
+        final moveSpeed = (1500 * _playbackSpeed).toInt().clamp(100, 4000);
+        
         // Move to position
-        await bleService.setAllJoints(
+        final success = await bleService.setAllJoints(
           pos.position,
-          speed: (1000 * _playbackSpeed).toInt(),
-          time: (1000 / _playbackSpeed).toInt(),
+          speed: moveSpeed,
+          time: moveTime,
         );
         
-        // Wait for movement to complete plus delay
-        await Future.delayed(Duration(
-          milliseconds: ((1000 + pos.delayAfterMs) / _playbackSpeed).toInt(),
-        ));
+        if (!success) {
+          debugPrint('Failed to send move command for position $i');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to move to: ${pos.name}')),
+          );
+          break;
+        }
+        
+        // Wait for movement to complete plus user-defined delay
+        final totalDelay = moveTime + (pos.delayAfterMs / _playbackSpeed).toInt();
+        debugPrint('Waiting ${totalDelay}ms for movement completion');
+        await Future.delayed(Duration(milliseconds: totalDelay));
       }
+      
+      if (!_isPlaying) break;
+      
     } while (_loopPlayback && _isPlaying);
     
+    debugPrint('Playback complete');
     setState(() {
       _isPlaying = false;
     });
