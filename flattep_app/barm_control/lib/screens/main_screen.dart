@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/arm_ble_service.dart';
@@ -14,11 +16,31 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  late bool _hasMotionSupport;
+  late List<Widget> _tabs;
+  late List<Widget> _tabViews;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    
+    // Check if platform supports motion sensors (Android, iOS, but not Linux, Windows, macOS, Web)
+    _hasMotionSupport = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+    
+    // Build tabs list based on platform
+    _tabs = [
+      const Tab(icon: Icon(Icons.tune), text: 'Joints'),
+      const Tab(icon: Icon(Icons.school), text: 'Teaching'),
+      if (_hasMotionSupport) const Tab(icon: Icon(Icons.sensors), text: 'Motion'),
+    ];
+    
+    _tabViews = [
+      const JointControlScreen(),
+      const TeachingModeScreen(),
+      if (_hasMotionSupport) const MotionControlScreen(),
+    ];
+    
+    _tabController = TabController(length: _tabs.length, vsync: this);
   }
 
   @override
@@ -51,20 +73,12 @@ class _MainScreenState extends State<MainScreen> with SingleTickerProviderStateM
             ],
             bottom: TabBar(
               controller: _tabController,
-              tabs: const [
-                Tab(icon: Icon(Icons.tune), text: 'Joints'),
-                Tab(icon: Icon(Icons.school), text: 'Teaching'),
-                Tab(icon: Icon(Icons.sensors), text: 'Motion'),
-              ],
+              tabs: _tabs,
             ),
           ),
           body: TabBarView(
             controller: _tabController,
-            children: const [
-              JointControlScreen(),
-              TeachingModeScreen(),
-              MotionControlScreen(),
-            ],
+            children: _tabViews,
           ),
         );
       },
