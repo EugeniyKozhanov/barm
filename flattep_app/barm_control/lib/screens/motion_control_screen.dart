@@ -20,19 +20,19 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   // Joint enable/disable state
   final List<bool> _jointEnabled = List.filled(6, false);
   
-  // Joint invert state
-  final List<bool> _jointInverted = List.filled(6, false);
+  // Joint invert state (default invert for joints 0, 2, 3)
+  final List<bool> _jointInverted = [true, false, true, true, false, false];
   
   // Threshold settings
   double _gyroThreshold = 2.0;
   double _accelThreshold = 2.0;
   
   // Delta (scale factor) settings
-  double _pitchDelta = 20.0;
-  double _rollDelta = 20.0;
+  double _pitchDelta = 60.0;
+  double _rollDelta = 60.0;
   
-  // Update frequency in milliseconds (1Hz = 1000ms by default)
-  int _updateFrequencyMs = 1000;
+  // Update frequency in milliseconds (4Hz = 250ms by default)
+  int _updateFrequencyMs = 250;
   
   // Sensor subscriptions
   StreamSubscription<GyroscopeEvent>? _gyroSubscription;
