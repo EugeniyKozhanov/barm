@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/arm_ble_service.dart';
 import '../models/arm_position.dart';
 
@@ -18,6 +19,40 @@ class PositionManagerScreen extends StatefulWidget {
 class _PositionManagerScreenState extends State<PositionManagerScreen> {
   final List<SavedPosition?> _savedPositions = List.filled(16, null);
   int? _selectedSlot;
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedPositions();
+  }
+  
+  Future<void> _loadSavedPositions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonString = prefs.getString('saved_positions');
+      
+      if (jsonString != null && jsonString.isNotEmpty && mounted) {
+        final loaded = SavedPosition.savedPositionsFromJsonString(jsonString);
+        setState(() {
+          for (int i = 0; i < 16; i++) {
+            _savedPositions[i] = loaded[i];
+          }
+        });
+      }
+    } catch (e) {
+      print('Error loading saved positions: $e');
+    }
+  }
+  
+  Future<void> _saveSavedPositions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonString = SavedPosition.savedPositionsToJsonString(_savedPositions);
+      await prefs.setString('saved_positions', jsonString);
+    } catch (e) {
+      print('Error saving positions: $e');
+    }
+  }
   
   @override
   Widget build(BuildContext context) {
@@ -195,9 +230,8 @@ class _PositionManagerScreenState extends State<PositionManagerScreen> {
     );
     
     if (shouldSave == true) {
-      final success = await bleService.savePosition(_selectedSlot!, widget.currentPosition);
-      
-      if (success && mounted) {
+      // Save to local state and SharedPreferences only (not to ESP32 EEPROM)
+      if (mounted) {
         setState(() {
           _savedPositions[_selectedSlot!] = SavedPosition(
             slot: _selectedSlot!,
@@ -205,7 +239,12 @@ class _PositionManagerScreenState extends State<PositionManagerScreen> {
             name: nameController.text.isEmpty ? null : nameController.text,
           );
         });
-        
+      }
+      
+      // Persist to SharedPreferences
+      await _saveSavedPositions();
+      
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Position saved to slot $_selectedSlot')),
         );
@@ -216,12 +255,33 @@ class _PositionManagerScreenState extends State<PositionManagerScreen> {
   Future<void> _loadPosition(ArmBleService bleService) async {
     if (_selectedSlot == null) return;
     
-    final success = await bleService.loadPosition(_selectedSlot!, speed: 1000, time: 1000);
+    final savedPos = _savedPositions[_selectedSlot!];
+    if (savedPos == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No position saved in this slot')),
+        );
+      }
+      return;
+    }
     
-    if (success && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Loading position from slot $_selectedSlot')),
-      );
+    // Directly set the arm to the saved absolute position
+    final success = await bleService.setAllJoints(
+      savedPos.position,
+      speed: 1000,
+      time: 1000,
+    );
+    
+    if (mounted) {
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Loaded ${savedPos.displayName}')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to load position')),
+        );
+      }
     }
   }
 }
