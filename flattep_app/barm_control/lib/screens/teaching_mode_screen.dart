@@ -15,7 +15,8 @@ class TeachingModeScreen extends StatefulWidget {
 
 class _TeachingModeScreenState extends State<TeachingModeScreen> {
   bool _torqueEnabled = true;
-  List<TeachingPosition> _positions = [];
+  List<TeachingSession> _sessions = [];
+  TeachingSession? _currentSession;
   bool _isPlaying = false;
   double _playbackSpeed = 1.0;
   bool _loopPlayback = false;
@@ -24,28 +25,171 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadPositions();
+    _loadSessions();
   }
   
-  Future<void> _loadPositions() async {
+  Future<void> _loadSessions() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonString = prefs.getString('teaching_session');
+    final jsonString = prefs.getString('teaching_sessions');
     if (jsonString != null && jsonString.isNotEmpty) {
       try {
-        final session = TeachingSession.fromJsonString(jsonString);
+        final sessionList = TeachingSessionList.fromJsonString(jsonString);
         setState(() {
-          _positions = session.positions;
+          _sessions = sessionList.sessions;
+          // Load the most recently updated session as current
+          if (_sessions.isNotEmpty) {
+            _sessions.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+            _currentSession = _sessions.first;
+          }
         });
       } catch (e) {
-        debugPrint('Error loading teaching session: $e');
+        debugPrint('Error loading teaching sessions: $e');
       }
     }
   }
   
-  Future<void> _savePositions() async {
+  Future<void> _saveSessions() async {
     final prefs = await SharedPreferences.getInstance();
-    final session = TeachingSession(_positions);
-    await prefs.setString('teaching_session', session.toJsonString());
+    final sessionList = TeachingSessionList(_sessions);
+    await prefs.setString('teaching_sessions', sessionList.toJsonString());
+  }
+  
+  List<TeachingPosition> get _positions => _currentSession?.positions ?? [];
+  
+  Future<void> _saveCurrentSession() async {
+    if (_currentSession != null) {
+      // Update the session in the list
+      final index = _sessions.indexWhere((s) => s.id == _currentSession!.id);
+      if (index != -1) {
+        _sessions[index] = _currentSession!.copyWith(updatedAt: DateTime.now());
+      }
+      await _saveSessions();
+    }
+  }
+  
+  Future<void> _createNewSession() async {
+    final TextEditingController nameController = TextEditingController(
+      text: 'Session ${_sessions.length + 1}',
+    );
+    
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('New Session'),
+        content: TextField(
+          controller: nameController,
+          decoration: const InputDecoration(
+            labelText: 'Session Name',
+            hintText: 'Enter a name for this session',
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, nameController.text),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    
+    if (name != null && name.isNotEmpty) {
+      final newSession = TeachingSession(
+        id: _uuid.v4(),
+        name: name,
+        positions: [],
+      );
+      
+      setState(() {
+        _sessions.add(newSession);
+        _currentSession = newSession;
+      });
+      
+      await _saveSessions();
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Created session: $name')),
+      );
+    }
+  }
+  
+  Future<void> _selectSession() async {
+    if (_sessions.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No sessions available')),
+      );
+      return;
+    }
+    
+    final selected = await showDialog<TeachingSession>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Select Session'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _sessions.length,
+            itemBuilder: (context, index) {
+              final session = _sessions[index];
+              return ListTile(
+                title: Text(session.name),
+                subtitle: Text('${session.positions.length} positions'),
+                selected: session.id == _currentSession?.id,
+                onTap: () => Navigator.pop(context, session),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    
+    if (selected != null) {
+      setState(() {
+        _currentSession = selected;
+      });
+    }
+  }
+  
+  Future<void> _deleteSession(TeachingSession session) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Session'),
+        content: Text('Delete session "${session.name}" and all its positions?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirmed == true) {
+      setState(() {
+        _sessions.remove(session);
+        if (_currentSession?.id == session.id) {
+          _currentSession = _sessions.isNotEmpty ? _sessions.first : null;
+        }
+      });
+      await _saveSessions();
+    }
   }
   
   Future<void> _toggleTorque() async {
@@ -164,11 +308,23 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
         timestamp: DateTime.now(),
       );
       
+      if (_currentSession == null) {
+        // Create default session if none exists
+        _currentSession = TeachingSession(
+          id: _uuid.v4(),
+          name: 'Default Session',
+          positions: [],
+        );
+        _sessions.add(_currentSession!);
+      }
+      
       setState(() {
-        _positions.add(teachingPos);
+        _currentSession = _currentSession!.copyWith(
+          positions: [..._currentSession!.positions, teachingPos],
+        );
       });
       
-      await _savePositions();
+      await _saveCurrentSession();
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Saved: $name')),
@@ -196,20 +352,25 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
       ),
     );
     
-    if (confirmed == true) {
+    if (confirmed == true && _currentSession != null) {
+      final updatedPositions = List<TeachingPosition>.from(_currentSession!.positions);
+      updatedPositions.removeAt(index);
+      
       setState(() {
-        _positions.removeAt(index);
+        _currentSession = _currentSession!.copyWith(positions: updatedPositions);
       });
-      await _savePositions();
+      await _saveCurrentSession();
     }
   }
   
   Future<void> _clearAll() async {
+    if (_currentSession == null) return;
+    
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Clear All'),
-        content: const Text('Delete all saved positions?'),
+        content: const Text('Delete all positions in current session?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -226,9 +387,9 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
     
     if (confirmed == true) {
       setState(() {
-        _positions.clear();
+        _currentSession = _currentSession!.copyWith(positions: []);
       });
-      await _savePositions();
+      await _saveCurrentSession();
     }
   }
   
@@ -328,8 +489,24 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Teaching Mode'),
+        title: Text(_currentSession != null ? _currentSession!.name : 'Teaching Mode'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.folder_open),
+            onPressed: _selectSession,
+            tooltip: 'Select session',
+          ),
+          IconButton(
+            icon: const Icon(Icons.create_new_folder),
+            onPressed: _createNewSession,
+            tooltip: 'New session',
+          ),
+          if (_currentSession != null && _sessions.length > 1)
+            IconButton(
+              icon: const Icon(Icons.delete_forever),
+              onPressed: () => _deleteSession(_currentSession!),
+              tooltip: 'Delete session',
+            ),
           if (_positions.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep),
@@ -340,6 +517,37 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
       ),
       body: Column(
         children: [
+          // Session info card
+          if (_currentSession != null)
+            Card(
+              margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              color: Colors.blue.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.blue.shade700),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Session: ${_currentSession!.name}',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                          Text(
+                            '${_positions.length} positions',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          
           // Control Panel
           Card(
             margin: const EdgeInsets.all(16),
@@ -473,27 +681,53 @@ class _TeachingModeScreenState extends State<TeachingModeScreen> {
           
           // Positions List
           Expanded(
-            child: _positions.isEmpty
+            child: _currentSession == null
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.gesture, size: 64, color: Colors.grey[400]),
+                        Icon(Icons.folder_off, size: 64, color: Colors.grey[400]),
                         const SizedBox(height: 16),
                         Text(
-                          'No positions saved yet',
+                          'No session selected',
                           style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Disable torque and move the arm\nthen save positions',
+                          'Create a new session or select an existing one',
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+                        ),
+                        const SizedBox(height: 24),
+                        ElevatedButton.icon(
+                          onPressed: _createNewSession,
+                          icon: const Icon(Icons.create_new_folder),
+                          label: const Text('Create New Session'),
                         ),
                       ],
                     ),
                   )
-                : ListView.builder(
+                : _positions.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.gesture, size: 64, color: Colors.grey[400]),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No positions in this session',
+                              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Disable torque and move the arm\nthen save positions',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 14, color: Colors.grey[500]),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
                     itemCount: _positions.length,
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     itemBuilder: (context, index) {

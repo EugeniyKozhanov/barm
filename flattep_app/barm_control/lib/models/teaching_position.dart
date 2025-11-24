@@ -38,18 +38,77 @@ class TeachingPosition {
 }
 
 class TeachingSession {
+  final String id;
+  final String name;
   final List<TeachingPosition> positions;
+  final DateTime createdAt;
+  final DateTime updatedAt;
   
-  TeachingSession(this.positions);
+  TeachingSession({
+    required this.id,
+    required this.name,
+    required this.positions,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) : createdAt = createdAt ?? DateTime.now(),
+       updatedAt = updatedAt ?? DateTime.now();
+  
+  TeachingSession copyWith({
+    String? name,
+    List<TeachingPosition>? positions,
+    DateTime? updatedAt,
+  }) {
+    return TeachingSession(
+      id: id,
+      name: name ?? this.name,
+      positions: positions ?? this.positions,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? DateTime.now(),
+    );
+  }
+  
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'positions': positions.map((p) => p.toJson()).toList(),
+      'createdAt': createdAt.toIso8601String(),
+      'updatedAt': updatedAt.toIso8601String(),
+    };
+  }
+  
+  factory TeachingSession.fromJson(Map<String, dynamic> json) {
+    return TeachingSession(
+      id: json['id'],
+      name: json['name'],
+      positions: (json['positions'] as List).map((p) => TeachingPosition.fromJson(p)).toList(),
+      createdAt: DateTime.parse(json['createdAt']),
+      updatedAt: DateTime.parse(json['updatedAt']),
+    );
+  }
   
   String toJsonString() {
-    final list = positions.map((p) => p.toJson()).toList();
-    return jsonEncode(list);
+    return jsonEncode(toJson());
   }
   
   factory TeachingSession.fromJsonString(String jsonString) {
+    return TeachingSession.fromJson(jsonDecode(jsonString));
+  }
+}
+
+class TeachingSessionList {
+  final List<TeachingSession> sessions;
+  
+  TeachingSessionList(this.sessions);
+  
+  String toJsonString() {
+    final list = sessions.map((s) => s.toJson()).toList();
+    return jsonEncode(list);
+  }
+  
+  factory TeachingSessionList.fromJsonString(String jsonString) {
     final List<dynamic> list = jsonDecode(jsonString);
-    final positions = list.map((json) => TeachingPosition.fromJson(json)).toList();
-    return TeachingSession(positions);
+    final sessions = list.map((json) => TeachingSession.fromJson(json)).toList();
+    return TeachingSessionList(sessions);
   }
 }
