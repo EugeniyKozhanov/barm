@@ -47,6 +47,11 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   
   // Timer for sending commands
   Timer? _updateTimer;
+  
+  // Gripper control
+  Timer? _gripperTimer;
+  bool _isGripperPressed = false;
+  int _gripperBasePosition = 2048;
 
   @override
   void initState() {
@@ -60,6 +65,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
     _gyroSubscription?.cancel();
     _accelSubscription?.cancel();
     _updateTimer?.cancel();
+    _gripperTimer?.cancel();
     super.dispose();
   }
 
@@ -78,6 +84,9 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
     for (int i = 0; i < 6; i++) {
       _basePositions[i] = currentPos.jointPositions[i];
     }
+    
+    // Store gripper base position
+    _gripperBasePosition = currentPos.jointPositions[5];
     
     setState(() {
       _isMotionActive = true;
@@ -209,13 +218,44 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
     }
   }
 
-  void _openGripper() {
+  void _startGripperOpen() {
+    if (_isGripperPressed) return;
+    
     final bleService = Provider.of<ArmBleService>(context, listen: false);
     if (!bleService.isConnected) return;
     
-    // Joint 5 is gripper - open position
-    bleService.setSingleJoint(5, 1500, speed: 1500, time: 500);
-    debugPrint('Gripper opened');
+    setState(() {
+      _isGripperPressed = true;
+    });
+    
+    // Start timer to incrementally open gripper
+    _gripperTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      final currentPos = bleService.currentPosition.jointPositions[5];
+      // Open gripper: increment position by 50 each update
+      int newPos = (currentPos + 50).clamp(0, 4095);
+      bleService.setSingleJoint(5, newPos, speed: 2000, time: 100);
+    });
+    
+    debugPrint('Gripper opening started');
+  }
+  
+  void _stopGripperOpen() {
+    if (!_isGripperPressed) return;
+    
+    final bleService = Provider.of<ArmBleService>(context, listen: false);
+    
+    setState(() {
+      _isGripperPressed = false;
+    });
+    
+    _gripperTimer?.cancel();
+    
+    // Return to base position
+    if (bleService.isConnected) {
+      bleService.setSingleJoint(5, _gripperBasePosition, speed: 1500, time: 500);
+    }
+    
+    debugPrint('Gripper returned to base position');
   }
 
   void _resetBasePositions() {
@@ -618,12 +658,27 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _openGripper,
-                    icon: const Icon(Icons.open_in_full),
-                    label: const Text('Open Gripper'),
-                    style: ElevatedButton.styleFrom(
+                  child: GestureDetector(
+                    onTapDown: (_) => _startGripperOpen(),
+                    onTapUp: (_) => _stopGripperOpen(),
+                    onTapCancel: () => _stopGripperOpen(),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: _isGripperPressed ? Colors.blue.shade700 : Colors.blue,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                       padding: const EdgeInsets.all(16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.open_in_full, color: Colors.white),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Open Gripper (Hold)',
+                            style: TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
