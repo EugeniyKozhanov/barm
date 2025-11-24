@@ -24,8 +24,15 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   final List<bool> _jointInverted = List.filled(6, false);
   
   // Threshold settings
-  double _gyroThreshold = 0.5;
+  double _gyroThreshold = 2.0;
   double _accelThreshold = 2.0;
+  
+  // Delta (scale factor) settings
+  double _pitchDelta = 20.0;
+  double _rollDelta = 20.0;
+  
+  // Update frequency in milliseconds (1Hz = 1000ms by default)
+  int _updateFrequencyMs = 1000;
   
   // Sensor subscriptions
   StreamSubscription<GyroscopeEvent>? _gyroSubscription;
@@ -93,12 +100,12 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
       });
     });
     
-    // Start update timer (20Hz)
-    _updateTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+    // Start update timer with configurable frequency
+    _updateTimer = Timer.periodic(Duration(milliseconds: _updateFrequencyMs), (_) {
       _updateArmFromMotion();
     });
     
-    debugPrint('Motion control started');
+    debugPrint('Motion control started (${1000 ~/ _updateFrequencyMs}Hz)');
   }
 
   void _stopMotionControl() {
@@ -120,81 +127,86 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
     if (!bleService.isConnected) return;
     
     // Calculate pitch and roll from accelerometer
-    // Pitch: rotation around X axis (forward/backward tilt)
-    // Roll: rotation around Y axis (left/right tilt)
+    // Accelerometer measures tilt angle (gravity direction)
+    // pitch = accelY: Positive = tilting forward, Negative = tilting backward
+    // roll = accelX: Positive = tilting right, Negative = tilting left
     double pitch = _accelY; // Forward/backward tilt
     double roll = _accelX;  // Left/right tilt
     
-    // Calculate incremental changes
-    List<int> newPositions = List.from(_basePositions);
+    // Start with current arm positions for disabled joints
+    List<int> newPositions = List.from(bleService.currentPosition.jointPositions);
     bool hasMovement = false;
     
     // PITCH affects: Shoulder (Joint 1), Elbow (Joint 2), Wrist Pitch (Joint 4)
-    // Only move if pitch exceeds threshold, otherwise hold position
+    // Only move if pitch exceeds threshold AND joint is enabled
     if (pitch.abs() > _accelThreshold) {
-      int pitchDelta = (pitch * 20).toInt(); // Scale factor for smooth movement
+      // Pitch value only determines direction (sign)
+      // Delta slider value is the actual movement amount
+      int direction = pitch > 0 ? 1 : -1;
+      int pitchDelta = (_pitchDelta * direction).toInt();
       
       if (_jointEnabled[1]) { // Shoulder
-        newPositions[1] = (_basePositions[1] + pitchDelta * (_jointInverted[1] ? -1 : 1))
+        // Apply invert if checkbox is checked
+        int invertMultiplier = _jointInverted[1] ? -1 : 1;
+        newPositions[1] = (_basePositions[1] + pitchDelta * invertMultiplier)
             .clamp(0, 4095);
+        _basePositions[1] = newPositions[1];
         hasMovement = true;
       }
       
       if (_jointEnabled[2]) { // Elbow
-        newPositions[2] = (_basePositions[2] + pitchDelta * (_jointInverted[2] ? -1 : 1))
+        int invertMultiplier = _jointInverted[2] ? -1 : 1;
+        newPositions[2] = (_basePositions[2] + pitchDelta * invertMultiplier)
             .clamp(0, 4095);
+        _basePositions[2] = newPositions[2];
         hasMovement = true;
       }
       
       if (_jointEnabled[4]) { // Wrist Pitch
-        newPositions[4] = (_basePositions[4] + pitchDelta * (_jointInverted[4] ? -1 : 1))
+        int invertMultiplier = _jointInverted[4] ? -1 : 1;
+        newPositions[4] = (_basePositions[4] + pitchDelta * invertMultiplier)
             .clamp(0, 4095);
+        _basePositions[4] = newPositions[4];
         hasMovement = true;
       }
     }
-    // If pitch is below threshold, keep current positions (no movement for pitch joints)
+    // If pitch < threshold, pitch joints keep their current position (no movement)
     
     // ROLL affects: Base (Joint 0), Wrist Roll (Joint 3)
-    // Only move if roll exceeds threshold, otherwise hold position
+    // Only move if roll exceeds threshold AND joint is enabled
     if (roll.abs() > _accelThreshold) {
-      int rollDelta = (roll * 20).toInt(); // Scale factor for smooth movement
+      // Roll value only determines direction (sign)
+      // Delta slider value is the actual movement amount
+      int direction = roll > 0 ? 1 : -1;
+      int rollDelta = (_rollDelta * direction).toInt();
       
       if (_jointEnabled[0]) { // Base rotation
-        newPositions[0] = (_basePositions[0] + rollDelta * (_jointInverted[0] ? -1 : 1))
+        // Apply invert if checkbox is checked
+        int invertMultiplier = _jointInverted[0] ? -1 : 1;
+        newPositions[0] = (_basePositions[0] + rollDelta * invertMultiplier)
             .clamp(0, 4095);
+        _basePositions[0] = newPositions[0];
         hasMovement = true;
       }
       
       if (_jointEnabled[3]) { // Wrist roll
-        newPositions[3] = (_basePositions[3] + rollDelta * (_jointInverted[3] ? -1 : 1))
+        int invertMultiplier = _jointInverted[3] ? -1 : 1;
+        newPositions[3] = (_basePositions[3] + rollDelta * invertMultiplier)
             .clamp(0, 4095);
+        _basePositions[3] = newPositions[3];
         hasMovement = true;
       }
     }
-    // If roll is below threshold, keep current positions (no movement for roll joints)
+    // If roll < threshold, roll joints keep their current position (no movement)
     
-    // Update base positions incrementally only for joints that moved
+    // Send command only if there was actual movement on any axis
     if (hasMovement) {
-      // Only update base positions for enabled joints that had movement
-      if (pitch.abs() > _accelThreshold) {
-        if (_jointEnabled[1]) _basePositions[1] = newPositions[1];
-        if (_jointEnabled[2]) _basePositions[2] = newPositions[2];
-        if (_jointEnabled[4]) _basePositions[4] = newPositions[4];
-      }
-      
-      if (roll.abs() > _accelThreshold) {
-        if (_jointEnabled[0]) _basePositions[0] = newPositions[0];
-        if (_jointEnabled[3]) _basePositions[3] = newPositions[3];
-      }
-      
-      // Send command only if there was actual movement
       bleService.setAllJoints(
         ArmPosition(newPositions),
         speed: 2000,
         time: 100,
       );
     }
-    // When phone is horizontal (below threshold), no commands are sent = arm stops
   }
 
   void _openGripper() {
@@ -217,6 +229,28 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Base positions reset')),
     );
+  }
+
+  void _emergencyStop() {
+    final bleService = Provider.of<ArmBleService>(context, listen: false);
+    
+    // Stop motion control immediately
+    _stopMotionControl();
+    
+    // Disable torque to release all servos
+    if (bleService.isConnected) {
+      bleService.setTorque(false);
+    }
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('EMERGENCY STOP!'),
+        backgroundColor: Colors.red,
+        duration: Duration(seconds: 2),
+      ),
+    );
+    
+    debugPrint('Emergency stop executed - torque disabled');
   }
 
   @override
@@ -272,6 +306,23 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+            
+            const SizedBox(height: 12),
+            
+            // Emergency Stop button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _emergencyStop,
+                icon: const Icon(Icons.emergency, size: 28),
+                label: const Text('EMERGENCY STOP', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
               ),
             ),
@@ -460,36 +511,13 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                   children: [
                     Row(
                       children: [
-                        const SizedBox(width: 150, child: Text('Gyro Threshold:')),
-                        Expanded(
-                          child: Slider(
-                            value: _gyroThreshold,
-                            min: 0.1,
-                            max: 2.0,
-                            divisions: 19,
-                            label: _gyroThreshold.toStringAsFixed(1),
-                            onChanged: (value) {
-                              setState(() {
-                                _gyroThreshold = value;
-                              });
-                            },
-                          ),
-                        ),
-                        SizedBox(
-                          width: 40,
-                          child: Text(_gyroThreshold.toStringAsFixed(1)),
-                        ),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        const SizedBox(width: 150, child: Text('Accel Threshold:')),
+                        const SizedBox(width: 150, child: Text('Tilt Threshold:')),
                         Expanded(
                           child: Slider(
                             value: _accelThreshold,
                             min: 0.5,
-                            max: 5.0,
-                            divisions: 45,
+                            max: 10.0,
+                            divisions: 95,
                             label: _accelThreshold.toStringAsFixed(1),
                             onChanged: (value) {
                               setState(() {
@@ -501,6 +529,81 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                         SizedBox(
                           width: 40,
                           child: Text(_accelThreshold.toStringAsFixed(1)),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        const SizedBox(width: 150, child: Text('Pitch Delta:')),
+                        Expanded(
+                          child: Slider(
+                            value: _pitchDelta,
+                            min: 1.0,
+                            max: 100.0,
+                            divisions: 99,
+                            label: _pitchDelta.toStringAsFixed(0),
+                            onChanged: (value) {
+                              setState(() {
+                                _pitchDelta = value;
+                              });
+                            },
+                          ),
+                        ),
+                        SizedBox(
+                          width: 40,
+                          child: Text(_pitchDelta.toStringAsFixed(0)),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        const SizedBox(width: 150, child: Text('Roll Delta:')),
+                        Expanded(
+                          child: Slider(
+                            value: _rollDelta,
+                            min: 1.0,
+                            max: 100.0,
+                            divisions: 99,
+                            label: _rollDelta.toStringAsFixed(0),
+                            onChanged: (value) {
+                              setState(() {
+                                _rollDelta = value;
+                              });
+                            },
+                          ),
+                        ),
+                        SizedBox(
+                          width: 40,
+                          child: Text(_rollDelta.toStringAsFixed(0)),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        const SizedBox(width: 150, child: Text('Update Rate:')),
+                        Expanded(
+                          child: Slider(
+                            value: _updateFrequencyMs.toDouble(),
+                            min: 20,
+                            max: 2000,
+                            divisions: 40,
+                            label: _updateFrequencyMs >= 1000 
+                              ? '${(_updateFrequencyMs / 1000).toStringAsFixed(1)}s'
+                              : '${1000 ~/ _updateFrequencyMs}Hz',
+                            onChanged: _isMotionActive
+                                ? null
+                                : (value) {
+                                    setState(() {
+                                      _updateFrequencyMs = value.toInt();
+                                    });
+                                  },
+                          ),
+                        ),
+                        SizedBox(
+                          width: 60,
+                          child: Text(_updateFrequencyMs >= 1000
+                              ? '${(_updateFrequencyMs / 1000).toStringAsFixed(1)}s'
+                              : '${1000 ~/ _updateFrequencyMs}Hz'),
                         ),
                       ],
                     ),
