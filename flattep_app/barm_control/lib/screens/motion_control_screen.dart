@@ -137,7 +137,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
     List<int> newPositions = List.from(bleService.currentPosition.jointPositions);
     bool hasMovement = false;
     
-    // PITCH affects: Shoulder (Joint 1), Elbow (Joint 2), Wrist Pitch (Joint 4)
+    // PITCH affects: Shoulder (Joint 1), Elbow (Joint 2), Wrist Roll (Joint 3)
     // Only move if pitch exceeds threshold AND joint is enabled
     if (pitch.abs() > _accelThreshold) {
       // Pitch value only determines direction (sign)
@@ -162,17 +162,17 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
         hasMovement = true;
       }
       
-      if (_jointEnabled[4]) { // Wrist Pitch
-        int invertMultiplier = _jointInverted[4] ? -1 : 1;
-        newPositions[4] = (_basePositions[4] + pitchDelta * invertMultiplier)
+      if (_jointEnabled[3]) { // Wrist Roll
+        int invertMultiplier = _jointInverted[3] ? -1 : 1;
+        newPositions[3] = (_basePositions[3] + pitchDelta * invertMultiplier)
             .clamp(0, 4095);
-        _basePositions[4] = newPositions[4];
+        _basePositions[3] = newPositions[3];
         hasMovement = true;
       }
     }
     // If pitch < threshold, pitch joints keep their current position (no movement)
     
-    // ROLL affects: Base (Joint 0), Wrist Roll (Joint 3)
+    // ROLL affects: Base (Joint 0), Wrist Pitch (Joint 4)
     // Only move if roll exceeds threshold AND joint is enabled
     if (roll.abs() > _accelThreshold) {
       // Roll value only determines direction (sign)
@@ -189,11 +189,11 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
         hasMovement = true;
       }
       
-      if (_jointEnabled[3]) { // Wrist roll
-        int invertMultiplier = _jointInverted[3] ? -1 : 1;
-        newPositions[3] = (_basePositions[3] + rollDelta * invertMultiplier)
+      if (_jointEnabled[4]) { // Wrist Pitch
+        int invertMultiplier = _jointInverted[4] ? -1 : 1;
+        newPositions[4] = (_basePositions[4] + rollDelta * invertMultiplier)
             .clamp(0, 4095);
-        _basePositions[3] = newPositions[3];
+        _basePositions[4] = newPositions[4];
         hasMovement = true;
       }
     }
@@ -349,7 +349,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                                 style: const TextStyle(fontFamily: 'monospace', fontSize: 16),
                               ),
                               const Text(
-                                'Forward/Back → Shoulder + Elbow + Wrist Pitch',
+                                'Forward/Back → Shoulder + Elbow + Wrist Roll',
                                 style: TextStyle(fontSize: 10, color: Colors.grey),
                               ),
                             ],
@@ -370,7 +370,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                                 style: const TextStyle(fontFamily: 'monospace', fontSize: 16),
                               ),
                               const Text(
-                                'Left/Right → Base + Wrist Roll',
+                                'Left/Right → Base + Wrist Pitch',
                                 style: TextStyle(fontSize: 10, color: Colors.grey),
                               ),
                             ],
@@ -405,11 +405,11 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      '• Pitch (tilt forward/back): Controls Shoulder, Elbow, and Wrist Pitch together',
+                      '• Pitch (tilt forward/back): Controls Shoulder, Elbow, and Wrist Roll together',
                       style: TextStyle(fontSize: 12),
                     ),
                     const Text(
-                      '• Roll (tilt left/right): Controls Base rotation and Wrist Roll together',
+                      '• Roll (tilt left/right): Controls Base rotation and Wrist Pitch together',
                       style: TextStyle(fontSize: 12),
                     ),
                     const Text(
@@ -430,9 +430,9 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
             ...List.generate(6, (index) {
               // Determine which motion controls this joint
               String motionType = '';
-              if (index == 0 || index == 3) {
+              if (index == 0 || index == 4) {
                 motionType = 'ROLL';
-              } else if (index == 1 || index == 2 || index == 4) {
+              } else if (index == 1 || index == 2 || index == 3) {
                 motionType = 'PITCH';
               } else if (index == 5) {
                 motionType = 'GRIPPER';
