@@ -56,6 +56,10 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   
   // Volume button service
   final VolumeButtonService _volumeButtonService = VolumeButtonService();
+  
+  // Volume button long press detection
+  Timer? _volumeDownTimer;
+  bool _volumeDownPressed = false;
 
   @override
   void initState() {
@@ -67,6 +71,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   void dispose() {
     _stopMotionControl();
     _volumeButtonService.dispose();
+    _volumeDownTimer?.cancel();
     _gyroSubscription?.cancel();
     _accelSubscription?.cancel();
     _updateTimer?.cancel();
@@ -75,16 +80,31 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   }
 
   void _setupVolumeButtonListener() {
-    _volumeButtonService.startListening((button) {
+    _volumeButtonService.startListening((button, isPressed) {
       if (button == 'down') {
-        // Vol- pressed: freeze current position immediately
-        _freezeCurrentPosition();
-      } else if (button == 'up') {
-        // Vol+ pressed: toggle motion control
-        if (_isMotionActive) {
-          _stopMotionControl();
+        if (isPressed) {
+          // Vol- pressed: start timer for long press (hold for 300ms)
+          _volumeDownPressed = true;
+          _volumeDownTimer?.cancel();
+          _volumeDownTimer = Timer(const Duration(milliseconds: 300), () {
+            if (_volumeDownPressed) {
+              // Long press detected: freeze position
+              _freezeCurrentPosition();
+            }
+          });
         } else {
-          _startMotionControl();
+          // Vol- released: cancel freeze if not triggered yet
+          _volumeDownPressed = false;
+          _volumeDownTimer?.cancel();
+        }
+      } else if (button == 'up') {
+        if (isPressed) {
+          // Vol+ pressed: toggle motion control
+          if (_isMotionActive) {
+            _stopMotionControl();
+          } else {
+            _startMotionControl();
+          }
         }
       }
     });
@@ -92,15 +112,31 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   
   void _freezeCurrentPosition() {
     final bleService = Provider.of<ArmBleService>(context, listen: false);
-    if (!bleService.isConnected) return;
+    if (!bleService.isConnected || !_isMotionActive) return;
     
-    // Get current positions
+    // Stop the motion control timer immediately - this prevents ANY new commands
+    _updateTimer?.cancel();
+    _updateTimer = null;
+    
+    // Get current positions from the service cache
+    // Note: This may not be the exact servo position if commands are queued,
+    // but it represents the last command we sent
     final currentPos = bleService.currentPosition;
     
-    // Update base positions to current positions (freezes movement)
+    // Update base positions to current cached positions
     setState(() {
       for (int i = 0; i < 6; i++) {
         _basePositions[i] = currentPos.jointPositions[i];
+      }
+    });
+    
+    // Wait for current command to finish (use update frequency as reference)
+    // Add small margin to ensure command completes
+    Future.delayed(Duration(milliseconds: _updateFrequencyMs + 50), () {
+      if (_isMotionActive && mounted) {
+        _updateTimer = Timer.periodic(Duration(milliseconds: _updateFrequencyMs), (_) {
+          _updateArmFromMotion();
+        });
       }
     });
     
@@ -113,7 +149,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
       ),
     );
     
-    debugPrint('Position frozen at current location');
+    debugPrint('Position frozen - waiting for queue to clear');
   }
 
   void _startMotionControl() {
@@ -252,10 +288,13 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
     
     // Send command only if there was actual movement on any axis
     if (hasMovement) {
+      // Use time slightly less than update frequency to prevent command queuing
+      // This ensures each command completes before the next one is sent
+      int commandTime = (_updateFrequencyMs * 0.8).toInt();
       bleService.setAllJoints(
         ArmPosition(newPositions),
         speed: 2000,
-        time: 100,
+        time: commandTime,
       );
     }
   }
@@ -381,7 +420,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                           ),
                           const SizedBox(height: 4),
                           const Text(
-                            'Vol+: Toggle control | Vol-: Freeze position',
+                            'Vol+: Toggle control | Vol- (hold): Freeze position',
                             style: TextStyle(fontSize: 12),
                           ),
                         ],

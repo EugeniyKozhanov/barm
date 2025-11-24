@@ -6,17 +6,21 @@ class VolumeButtonService {
   static const EventChannel _eventChannel = EventChannel('com.barm.control/volume_events');
   
   StreamSubscription? _subscription;
-  Function(String)? _onVolumeButtonPressed;
+  Function(String, bool)? _onVolumeButtonEvent;
   
   /// Start listening to volume button events
-  /// onVolumeButtonPressed callback receives 'up' or 'down'
-  void startListening(Function(String) onVolumeButtonPressed) {
-    _onVolumeButtonPressed = onVolumeButtonPressed;
+  /// onVolumeButtonEvent callback receives button ('up' or 'down') and isPressed (true=down, false=up)
+  void startListening(Function(String, bool) onVolumeButtonEvent) {
+    _onVolumeButtonEvent = onVolumeButtonEvent;
     
     _subscription = _eventChannel.receiveBroadcastStream().listen(
       (event) {
-        if (event is String) {
-          _onVolumeButtonPressed?.call(event);
+        if (event is Map) {
+          final button = event['button'] as String?;
+          final isPressed = event['pressed'] as bool?;
+          if (button != null && isPressed != null) {
+            _onVolumeButtonEvent?.call(button, isPressed);
+          }
         }
       },
       onError: (error) {
@@ -32,7 +36,7 @@ class VolumeButtonService {
   void stopListening() {
     _subscription?.cancel();
     _subscription = null;
-    _onVolumeButtonPressed = null;
+    _onVolumeButtonEvent = null;
     
     // Disable volume button interception
     _channel.invokeMethod('disableVolumeButtons');

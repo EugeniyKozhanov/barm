@@ -49,15 +49,31 @@ class MainActivity : FlutterActivity() {
         if (volumeButtonsEnabled) {
             when (keyCode) {
                 KeyEvent.KEYCODE_VOLUME_UP -> {
-                    eventSink?.success("up")
+                    eventSink?.success(mapOf("button" to "up", "pressed" to true))
                     return true
                 }
                 KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                    eventSink?.success("down")
+                    eventSink?.success(mapOf("button" to "down", "pressed" to true))
                     return true
                 }
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+    
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (volumeButtonsEnabled) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP -> {
+                    eventSink?.success(mapOf("button" to "up", "pressed" to false))
+                    return true
+                }
+                KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    eventSink?.success(mapOf("button" to "down", "pressed" to false))
+                    return true
+                }
+            }
+        }
+        return super.onKeyUp(keyCode, event)
     }
 }

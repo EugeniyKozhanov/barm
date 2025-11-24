@@ -11,6 +11,8 @@ import AVFoundation
   private var volumeButtonsEnabled = false
   private var volumeObserver: NSKeyValueObservation?
   private var audioSession: AVAudioSession?
+  private var lastVolume: Float = 0.5
+  private var volumeButtonPressed = false
   
   override func application(
     _ application: UIApplication,
@@ -64,23 +66,36 @@ import AVFoundation
     audioSession = AVAudioSession.sharedInstance()
     try? audioSession?.setActive(true)
     
-    // Observe volume changes
-    let volumeView = MPVolumeView(frame: .zero)
-    let currentVolume = audioSession?.outputVolume ?? 0.5
+    // Store current volume
+    lastVolume = audioSession?.outputVolume ?? 0.5
     
+    // Observe volume changes
     volumeObserver = audioSession?.observe(\.outputVolume, options: [.new]) { [weak self] (session, change) in
       guard let self = self, self.volumeButtonsEnabled else { return }
       
       if let newVolume = change.newValue {
-        if newVolume > currentVolume {
-          self.eventSink?("up")
-        } else if newVolume < currentVolume {
-          self.eventSink?("down")
-        }
-        
-        // Reset volume to prevent actual volume change
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-          self.setSystemVolume(currentVolume)
+        // Detect button press (volume changed)
+        if newVolume != self.lastVolume {
+          let button = newVolume > self.lastVolume ? "up" : "down"
+          
+          // Send pressed event
+          if !self.volumeButtonPressed {
+            self.volumeButtonPressed = true
+            self.eventSink?(["button": button, "pressed": true])
+            
+            // Schedule release event after short delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+              if let self = self, self.volumeButtonPressed {
+                self.volumeButtonPressed = false
+                self.eventSink?(["button": button, "pressed": false])
+              }
+            }
+          }
+          
+          // Reset volume to prevent actual volume change
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+            self.setSystemVolume(self.lastVolume)
+          }
         }
       }
     }
