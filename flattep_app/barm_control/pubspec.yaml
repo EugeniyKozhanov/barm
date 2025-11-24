@@ -49,6 +49,9 @@ dependencies:
   
   # UUID generation
   uuid: ^4.3.3
+  
+  # Sensors (gyroscope, accelerometer)
+  sensors_plus: ^4.0.2
 
 dev_dependencies:
   flutter_test:
