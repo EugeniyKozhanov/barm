@@ -119,60 +119,82 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
     final bleService = Provider.of<ArmBleService>(context, listen: false);
     if (!bleService.isConnected) return;
     
-    // Calculate new positions based on sensor data
+    // Calculate pitch and roll from accelerometer
+    // Pitch: rotation around X axis (forward/backward tilt)
+    // Roll: rotation around Y axis (left/right tilt)
+    double pitch = _accelY; // Forward/backward tilt
+    double roll = _accelX;  // Left/right tilt
+    
+    // Calculate incremental changes
     List<int> newPositions = List.from(_basePositions);
+    bool hasMovement = false;
     
-    // Map gyroscope to joint movements
-    // Gyro X -> Joint 0 (base rotation)
-    if (_jointEnabled[0]) {
-      double delta = _gyroZ * 100; // Scale factor
-      if (delta.abs() > _gyroThreshold) {
-        newPositions[0] = (_basePositions[0] + (delta * (_jointInverted[0] ? -1 : 1)).toInt())
+    // PITCH affects: Shoulder (Joint 1), Elbow (Joint 2), Wrist Pitch (Joint 4)
+    // Only move if pitch exceeds threshold, otherwise hold position
+    if (pitch.abs() > _accelThreshold) {
+      int pitchDelta = (pitch * 20).toInt(); // Scale factor for smooth movement
+      
+      if (_jointEnabled[1]) { // Shoulder
+        newPositions[1] = (_basePositions[1] + pitchDelta * (_jointInverted[1] ? -1 : 1))
             .clamp(0, 4095);
+        hasMovement = true;
+      }
+      
+      if (_jointEnabled[2]) { // Elbow
+        newPositions[2] = (_basePositions[2] + pitchDelta * (_jointInverted[2] ? -1 : 1))
+            .clamp(0, 4095);
+        hasMovement = true;
+      }
+      
+      if (_jointEnabled[4]) { // Wrist Pitch
+        newPositions[4] = (_basePositions[4] + pitchDelta * (_jointInverted[4] ? -1 : 1))
+            .clamp(0, 4095);
+        hasMovement = true;
       }
     }
+    // If pitch is below threshold, keep current positions (no movement for pitch joints)
     
-    // Gyro Y -> Joint 1 (shoulder)
-    if (_jointEnabled[1]) {
-      double delta = _gyroY * 100;
-      if (delta.abs() > _gyroThreshold) {
-        newPositions[1] = (_basePositions[1] + (delta * (_jointInverted[1] ? -1 : 1)).toInt())
+    // ROLL affects: Base (Joint 0), Wrist Roll (Joint 3)
+    // Only move if roll exceeds threshold, otherwise hold position
+    if (roll.abs() > _accelThreshold) {
+      int rollDelta = (roll * 20).toInt(); // Scale factor for smooth movement
+      
+      if (_jointEnabled[0]) { // Base rotation
+        newPositions[0] = (_basePositions[0] + rollDelta * (_jointInverted[0] ? -1 : 1))
             .clamp(0, 4095);
+        hasMovement = true;
+      }
+      
+      if (_jointEnabled[3]) { // Wrist roll
+        newPositions[3] = (_basePositions[3] + rollDelta * (_jointInverted[3] ? -1 : 1))
+            .clamp(0, 4095);
+        hasMovement = true;
       }
     }
+    // If roll is below threshold, keep current positions (no movement for roll joints)
     
-    // Gyro X -> Joint 2 (elbow)
-    if (_jointEnabled[2]) {
-      double delta = _gyroX * 100;
-      if (delta.abs() > _gyroThreshold) {
-        newPositions[2] = (_basePositions[2] + (delta * (_jointInverted[2] ? -1 : 1)).toInt())
-            .clamp(0, 4095);
+    // Update base positions incrementally only for joints that moved
+    if (hasMovement) {
+      // Only update base positions for enabled joints that had movement
+      if (pitch.abs() > _accelThreshold) {
+        if (_jointEnabled[1]) _basePositions[1] = newPositions[1];
+        if (_jointEnabled[2]) _basePositions[2] = newPositions[2];
+        if (_jointEnabled[4]) _basePositions[4] = newPositions[4];
       }
-    }
-    
-    // Accel for remaining joints
-    if (_jointEnabled[3]) {
-      double delta = _accelX * 50;
-      if (delta.abs() > _accelThreshold) {
-        newPositions[3] = (_basePositions[3] + (delta * (_jointInverted[3] ? -1 : 1)).toInt())
-            .clamp(0, 4095);
+      
+      if (roll.abs() > _accelThreshold) {
+        if (_jointEnabled[0]) _basePositions[0] = newPositions[0];
+        if (_jointEnabled[3]) _basePositions[3] = newPositions[3];
       }
+      
+      // Send command only if there was actual movement
+      bleService.setAllJoints(
+        ArmPosition(newPositions),
+        speed: 2000,
+        time: 100,
+      );
     }
-    
-    if (_jointEnabled[4]) {
-      double delta = _accelY * 50;
-      if (delta.abs() > _accelThreshold) {
-        newPositions[4] = (_basePositions[4] + (delta * (_jointInverted[4] ? -1 : 1)).toInt())
-            .clamp(0, 4095);
-      }
-    }
-    
-    // Send command
-    bleService.setAllJoints(
-      ArmPosition(newPositions),
-      speed: 2000,
-      time: 100,
-    );
+    // When phone is horizontal (below threshold), no commands are sent = arm stops
   }
 
   void _openGripper() {
@@ -266,26 +288,82 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                   children: [
                     Row(
                       children: [
-                        const SizedBox(width: 100, child: Text('Gyroscope:')),
+                        const SizedBox(width: 100, child: Text('Pitch (Y):', style: TextStyle(fontWeight: FontWeight.bold))),
                         Expanded(
-                          child: Text(
-                            'X: ${_gyroX.toStringAsFixed(2)}  Y: ${_gyroY.toStringAsFixed(2)}  Z: ${_gyroZ.toStringAsFixed(2)}',
-                            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _accelY.toStringAsFixed(2),
+                                style: const TextStyle(fontFamily: 'monospace', fontSize: 16),
+                              ),
+                              const Text(
+                                'Forward/Back → Shoulder + Elbow + Wrist Pitch',
+                                style: TextStyle(fontSize: 10, color: Colors.grey),
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
                     Row(
                       children: [
-                        const SizedBox(width: 100, child: Text('Accelerometer:')),
+                        const SizedBox(width: 100, child: Text('Roll (X):', style: TextStyle(fontWeight: FontWeight.bold))),
                         Expanded(
-                          child: Text(
-                            'X: ${_accelX.toStringAsFixed(2)}  Y: ${_accelY.toStringAsFixed(2)}  Z: ${_accelZ.toStringAsFixed(2)}',
-                            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _accelX.toStringAsFixed(2),
+                                style: const TextStyle(fontFamily: 'monospace', fontSize: 16),
+                              ),
+                              const Text(
+                                'Left/Right → Base + Wrist Roll',
+                                style: TextStyle(fontSize: 10, color: Colors.grey),
+                              ),
+                            ],
                           ),
                         ),
                       ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Motion mapping explanation
+            Card(
+              color: Colors.blue.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.blue.shade700),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Incremental Motion Control',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '• Pitch (tilt forward/back): Controls Shoulder, Elbow, and Wrist Pitch together',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    const Text(
+                      '• Roll (tilt left/right): Controls Base rotation and Wrist Roll together',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    const Text(
+                      '• Movements are incremental - positions update continuously',
+                      style: TextStyle(fontSize: 12),
                     ),
                   ],
                 ),
@@ -299,6 +377,16 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
             const SizedBox(height: 8),
             
             ...List.generate(6, (index) {
+              // Determine which motion controls this joint
+              String motionType = '';
+              if (index == 0 || index == 3) {
+                motionType = 'ROLL';
+              } else if (index == 1 || index == 2 || index == 4) {
+                motionType = 'PITCH';
+              } else if (index == 5) {
+                motionType = 'GRIPPER';
+              }
+              
               return Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: Padding(
@@ -306,10 +394,23 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                   child: Row(
                     children: [
                       SizedBox(
-                        width: 80,
-                        child: Text(
-                          'Joint $index',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        width: 100,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Joint $index',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              motionType,
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: motionType == 'ROLL' ? Colors.orange : 
+                                       motionType == 'PITCH' ? Colors.blue : Colors.grey,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       Expanded(
