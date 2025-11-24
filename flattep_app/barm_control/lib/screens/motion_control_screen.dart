@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import '../services/arm_ble_service.dart';
+import '../services/volume_button_service.dart';
 import '../models/arm_position.dart';
 
 class MotionControlScreen extends StatefulWidget {
@@ -52,6 +53,9 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   Timer? _gripperTimer;
   bool _isGripperPressed = false;
   int _gripperBasePosition = 2048;
+  
+  // Volume button service
+  final VolumeButtonService _volumeButtonService = VolumeButtonService();
 
   @override
   void initState() {
@@ -62,6 +66,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   @override
   void dispose() {
     _stopMotionControl();
+    _volumeButtonService.dispose();
     _gyroSubscription?.cancel();
     _accelSubscription?.cancel();
     _updateTimer?.cancel();
@@ -70,8 +75,45 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
   }
 
   void _setupVolumeButtonListener() {
-    // Note: Volume button handling requires platform-specific implementation
-    // This is a placeholder - actual implementation would need method channel
+    _volumeButtonService.startListening((button) {
+      if (button == 'down') {
+        // Vol- pressed: freeze current position immediately
+        _freezeCurrentPosition();
+      } else if (button == 'up') {
+        // Vol+ pressed: toggle motion control
+        if (_isMotionActive) {
+          _stopMotionControl();
+        } else {
+          _startMotionControl();
+        }
+      }
+    });
+  }
+  
+  void _freezeCurrentPosition() {
+    final bleService = Provider.of<ArmBleService>(context, listen: false);
+    if (!bleService.isConnected) return;
+    
+    // Get current positions
+    final currentPos = bleService.currentPosition;
+    
+    // Update base positions to current positions (freezes movement)
+    setState(() {
+      for (int i = 0; i < 6; i++) {
+        _basePositions[i] = currentPos.jointPositions[i];
+      }
+    });
+    
+    // Show feedback
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Position frozen!'),
+        duration: Duration(milliseconds: 500),
+        backgroundColor: Colors.orange,
+      ),
+    );
+    
+    debugPrint('Position frozen at current location');
   }
 
   void _startMotionControl() {
@@ -339,7 +381,7 @@ class _MotionControlScreenState extends State<MotionControlScreen> {
                           ),
                           const SizedBox(height: 4),
                           const Text(
-                            'Vol+: Toggle control | Vol-: Open gripper',
+                            'Vol+: Toggle control | Vol-: Freeze position',
                             style: TextStyle(fontSize: 12),
                           ),
                         ],
