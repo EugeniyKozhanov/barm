@@ -60,14 +60,6 @@ class _JointControlScreenState extends State<JointControlScreen> {
         title: const Text('ARM100 Control'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.school),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const TeachingModeScreen()),
-            ),
-            tooltip: 'Teaching Mode',
-          ),
-          IconButton(
             icon: const Icon(Icons.save),
             onPressed: () => Navigator.push(
               context,
