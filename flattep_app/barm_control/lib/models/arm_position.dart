@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:convert';
 
 class ArmPosition {
   final List<int> jointPositions; // 6 joints, values 0-4095
@@ -61,4 +62,48 @@ class SavedPosition {
   }) : assert(slot >= 0 && slot < 16);
   
   String get displayName => name ?? 'Position $slot';
+  
+  // Convert to JSON
+  Map<String, dynamic> toJson() {
+    return {
+      'slot': slot,
+      'position': position.jointPositions,
+      'name': name,
+    };
+  }
+  
+  // Create from JSON
+  factory SavedPosition.fromJson(Map<String, dynamic> json) {
+    return SavedPosition(
+      slot: json['slot'] as int,
+      position: ArmPosition(List<int>.from(json['position'] as List)),
+      name: json['name'] as String?,
+    );
+  }
+  
+  // Serialize list of saved positions to JSON string
+  static String savedPositionsToJsonString(List<SavedPosition?> positions) {
+    final validPositions = positions
+        .where((p) => p != null)
+        .map((p) => p!.toJson())
+        .toList();
+    return jsonEncode(validPositions);
+  }
+  
+  // Deserialize JSON string to list of saved positions (16 slots)
+  static List<SavedPosition?> savedPositionsFromJsonString(String jsonString) {
+    final List<SavedPosition?> result = List.filled(16, null);
+    try {
+      final List<dynamic> list = jsonDecode(jsonString) as List;
+      for (var json in list) {
+        final position = SavedPosition.fromJson(json as Map<String, dynamic>);
+        if (position.slot >= 0 && position.slot < 16) {
+          result[position.slot] = position;
+        }
+      }
+    } catch (e) {
+      print('Error parsing saved positions: $e');
+    }
+    return result;
+  }
 }
